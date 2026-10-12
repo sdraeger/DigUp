@@ -732,9 +732,10 @@ nonisolated final class Engine: @unchecked Sendable {
             // over and over, though, if something else is wrong.
             watchdogStops = watchdogStops.filter { Date().timeIntervalSince($0) < 600 } + [Date()]
             if watchdogStops.count <= 3 { startHelper() } else { log("indexer: stopped on files 4 times in 10 min") }
-        } else if syncWantedAt != nil, status == 0 {
-            // A sync asked for while it was on its way out still has to happen.
-            startHelper()
+        } else if let wanted = syncWantedAt, status == 0 {
+            // A sync asked for while it was on its way out still has to happen. One it started for and couldn't do
+            // (its sync failed) waits for the next change: restarting for it would loop as fast as it fails.
+            if wanted > helperStarted { startHelper() } else { syncWantedAt = nil }
         }
     }
 
