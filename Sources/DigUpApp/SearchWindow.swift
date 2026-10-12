@@ -290,7 +290,14 @@ final class SearchModel {
         if SearchPanelController.isFilePath(typed) {
             return query = LikeQuery.query((typed as NSString).expandingTildeInPath)
         }
-        if let path = LikeQuery.path(of: typed) {
+        if LikeQuery.isLike(typed) {
+            // Its path still being typed (the field completes it): nothing yet.
+            guard let path = LikeQuery.path(of: typed), SearchPanelController.isFilePath(path) else {
+                results = .empty
+                counts = [:]
+                hasResults = false
+                return
+            }
             let (segment, filter) = (example?.path == path ? example?.segment : nil, self.filter)
             task = Task {
                 let all = await engine.similar(to: path, segment: segment, limit: 120)

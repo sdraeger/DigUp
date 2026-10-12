@@ -112,6 +112,11 @@ public enum LikeQuery {
         return path.isEmpty ? nil : (path as NSString).expandingTildeInPath
     }
 
+    /// A search by example, whole or with its path still being typed ("like:" alone too).
+    public static func isLike(_ query: String) -> Bool {
+        query.drop { $0.isWhitespace }.prefix(prefix.count).lowercased() == prefix
+    }
+
     /// The query for the file at `path`, home written as `~`.
     public static func query(_ path: String) -> String {
         let home = NSHomeDirectory()

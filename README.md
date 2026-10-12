@@ -30,8 +30,8 @@ whatever kind of file it is. All of it happens on your Mac.
 - a search in English can find a note written in Bengali, Arabic or any of the model's 100+ languages, and the other
   way around
 - "code: retry a failed call with backoff" finds the function in your projects, if you turn on code search
-- a file is a search too: drop a photo, a recording or a document into the panel, or press ⌘L on a result, and get
-  the pictures, pages, moments and notes most like it
+- a file is a search too: drop a photo, a recording or a document into the panel, press ⌘L on a result, or type
+  "like: " and its path (⇥ completes it), and get the pictures, pages, moments and notes most like it
 - a saved search keeps watching: save "receipts" with ⌘S, and DigUp tells you when a new file matches it
 
 Exact words count too. Invoice numbers, error codes and names are matched as written, in file names, document text

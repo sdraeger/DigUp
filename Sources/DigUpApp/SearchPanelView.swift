@@ -14,7 +14,7 @@ struct SearchPanelView: View {
                     .frame(maxHeight: .infinity)
                 Divider()
                 footer
-            } else if !controller.saved.isEmpty {
+            } else if !controller.saved.isEmpty, !controller.isLike {
                 Divider()
                 SavedSearchList(controller: controller)
             }
@@ -411,7 +411,8 @@ struct ThumbnailView: View {
 }
 
 /// The search field. AppKit, so the panel and the window can focus it and see its text selection (for ⌘C) directly;
-/// the arrows, ↩ and Esc never reach it, because their key monitors take those first.
+/// the arrows, ↩ and Esc never reach it, because their key monitors take those first (except while a path is typed
+/// after "like:", when ⇥, → and ↩ take its completion).
 struct SearchField: NSViewRepresentable {
     @Binding var text: String
     var fontSize: CGFloat = 22
@@ -444,6 +445,7 @@ struct SearchField: NSViewRepresentable {
         // is committed, and writing `text` back would cut the composition short ("사어ㅂ" typed for "사업").
         if (field.currentEditor() as? NSTextView)?.hasMarkedText() != true, field.stringValue != text {
             field.stringValue = text
+            (field as? FocusReportingField)?.complete(to: context.coordinator.completer.complete(text))
         }
         if field.placeholderString != placeholder { field.placeholderString = placeholder }
     }
@@ -452,6 +454,7 @@ struct SearchField: NSViewRepresentable {
 
     final class Coordinator: NSObject, NSTextFieldDelegate {
         var text: Binding<String>
+        let completer = PathCompleter()
 
         init(text: Binding<String>) {
             self.text = text
@@ -460,13 +463,91 @@ struct SearchField: NSViewRepresentable {
         func controlTextDidChange(_ notification: Notification) {
             guard let field = notification.object as? NSTextField else { return }
             text.wrappedValue = field.stringValue
+            (field as? FocusReportingField)?.complete(to: completer.complete(field.stringValue))
+        }
+
+        /// ⇥, → or ↩ at the end of the text takes the path's completion; without one, they do what they always do.
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            guard [#selector(NSResponder.insertTab(_:)), #selector(NSResponder.moveRight(_:)),
+                   #selector(NSResponder.insertNewline(_:))].contains(selector) else { return false }
+            return (control as? FocusReportingField)?.acceptCompletion() ?? false
         }
     }
 }
 
-/// A text field that says when it gets the cursor and when it gives it up (its editing ends).
+/// `LikeQuery.completion`, listing the folder being typed in once while you type there (again after 10 s, for new
+/// files).
+final class PathCompleter {
+    private var listed: (folder: String, at: Date, entries: [LikeQuery.Entry])?
+
+    func complete(_ text: String) -> String? {
+        LikeQuery.completion(of: text) { folder in
+            if let listed, listed.folder == folder, Date().timeIntervalSince(listed.at) < 10 { return listed.entries }
+            let entries = LikeQuery.entries(in: folder)
+            listed = (folder, Date(), entries)
+            return entries
+        }
+    }
+}
+
+/// A text field that says when it gets the cursor and when it gives it up (its editing ends), and shows the rest of a
+/// path being typed after "like:" in gray after the text, fading in and out the same way.
 final class FocusReportingField: NSTextField {
     var onFocus: (Bool) -> Void = { _ in }
+    /// The text with its path completed, while the rest of it shows.
+    private(set) var completion: String?
+    private lazy var ghost: NSTextField = {
+        let label = GhostLabel(labelWithString: "")
+        label.textColor = .placeholderTextColor
+        label.lineBreakMode = .byClipping
+        label.alphaValue = 0
+        addSubview(label)
+        return label
+    }()
+
+    /// Shows what `completion` adds to the text, or fades out what showed (in its place, as it was).
+    func complete(to completion: String?) {
+        let typed = stringValue
+        let rest = completion.flatMap { $0.count > typed.count && $0.hasPrefix(typed) ? $0.dropFirst(typed.count) : nil }
+        self.completion = rest == nil ? nil : completion
+        guard let rest else { return fade(to: 0) }
+        ghost.font = font
+        ghost.stringValue = String(rest)
+        place()
+        fade(to: 1)
+    }
+
+    /// ⇥, → or ↩ with the cursor (or the selection) at the end: the completion becomes the text (and for a folder,
+    /// the next one shows).
+    func acceptCompletion() -> Bool {
+        guard let completion, let editor = currentEditor() as? NSTextView else { return false }
+        let length = (editor.string as NSString).length
+        guard editor.selectedRange().upperBound == length else { return false }
+        ghost.alphaValue = 0   // it's the text now: no fade
+        editor.insertText(completion, replacementRange: NSRange(location: 0, length: length))
+        return true
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if completion != nil { place() }
+    }
+
+    /// Right after the text, both drawn the same way; nowhere once the text fills the field (it scrolls).
+    private func place() {
+        let x = (stringValue as NSString).size(withAttributes: [.font: font ?? .systemFont(ofSize: 13)]).width
+        ghost.frame = NSRect(x: x, y: 0, width: max(0, bounds.width - x), height: bounds.height)
+        ghost.isHidden = x > bounds.width - 8
+    }
+
+    private func fade(to alpha: CGFloat) {
+        guard ghost.alphaValue != alpha else { return }
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            ghost.animator().alphaValue = alpha
+        }
+    }
 
     override func becomeFirstResponder() -> Bool {
         let became = super.becomeFirstResponder()
@@ -478,6 +559,11 @@ final class FocusReportingField: NSTextField {
         super.textDidEndEditing(notification)
         onFocus(false)
     }
+}
+
+/// The completion's text: clicks go through it to the field.
+private final class GhostLabel: NSTextField {
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }
 
 /// Click to select, double-click to open, drag to copy the file into Finder, Mail, a chat… (an AppKit dragging

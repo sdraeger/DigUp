@@ -26,6 +26,35 @@ import Testing
         #expect(LikeQuery.path(of: LikeQuery.query("/tmp/x.pdf")) == "/tmp/x.pdf")
     }
 
+    @Test func pathsBeingTypedCompleteToTheNewestFitting() {
+        let day: TimeInterval = 86_400
+        let entries: [LikeQuery.Entry] = [
+            .init(name: "Receipts", isFolder: true, modified: Date(timeIntervalSince1970: 3 * day)),
+            .init(name: "receipt-may.pdf", isFolder: false, modified: Date(timeIntervalSince1970: 2 * day)),
+            .init(name: "receipt-june.pdf", isFolder: false, modified: Date(timeIntervalSince1970: 4 * day)),
+            .init(name: "recorder.zip", isFolder: false, modified: Date(timeIntervalSince1970: 9 * day)),  // not read
+            .init(name: ".recent", isFolder: true, modified: Date(timeIntervalSince1970: 9 * day)),       // hidden
+        ]
+        var listed: [String] = []
+        let complete = { (query: String) in
+            LikeQuery.completion(of: query) { folder in
+                listed.append(folder)
+                return entries
+            }
+        }
+        #expect(complete("like: ~/Downloads/REC") == "like: ~/Downloads/receipt-june.pdf")
+        #expect(listed == [NSHomeDirectory() + "/Downloads"])
+        #expect(complete("like:/tmp/receipt-m") == "like:/tmp/receipt-may.pdf")
+        #expect(complete("like: /tmp/receipts") == "like: /tmp/Receipts/")   // a folder named in full: go on in it
+        #expect(complete("like: /tmp/receipt-may.pdf") == nil)              // whole
+        #expect(complete("like: /tmp/.rec") == "like: /tmp/.recent/")
+        #expect(complete("like: /tmp/zzz") == nil)
+        #expect(complete("like: ~") == "like: ~/")
+        #expect(complete("like: ") == nil)
+        #expect(complete("like otters") == nil)
+        #expect(complete("receipts") == nil)
+    }
+
     @Test func aFileIsMostLikeItself() throws {
         let files = folder.appendingPathComponent("files")
         try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)

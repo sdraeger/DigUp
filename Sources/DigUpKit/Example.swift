@@ -48,3 +48,58 @@ public enum Example: Sendable {
         }
     }
 }
+
+extension LikeQuery {
+    /// A file or folder in the folder a path is being typed in.
+    public struct Entry: Sendable {
+        public let name: String
+        public let isFolder: Bool
+        public let modified: Date
+
+        public init(name: String, isFolder: Bool, modified: Date) {
+            self.name = name
+            self.isFolder = isFolder
+            self.modified = modified
+        }
+    }
+
+    /// The query with the path being typed after "like:" completed, as fish suggests commands: to the newest file
+    /// DigUp can search by, or folder to go on in, whose name starts with what's typed of the last part ("like:
+    /// ~/Downloads/rec" → "like: ~/Downloads/receipt.pdf", its name as it's written). Nil when nothing fits or the
+    /// path is whole. `entries` lists a folder.
+    public static func completion(of query: String, entries: (String) -> [Entry]) -> String? {
+        guard isLike(query) else { return nil }
+        let path = query.drop { $0.isWhitespace }.dropFirst(prefix.count).drop { $0 == " " }
+        if path == "~" { return query + "/" }
+        guard path.hasPrefix("/") || path.hasPrefix("~/"), let slash = path.lastIndex(of: "/") else { return nil }
+        let folder = (String(path[...slash]) as NSString).expandingTildeInPath
+        let typed = path[path.index(after: slash)...]
+        let start = typed.lowercased()
+        let options = IndexOptions()
+        let entry = entries(folder).filter { entry in
+            let name = entry.name.lowercased()
+            return name.hasPrefix(start) && (name != start || entry.isFolder)
+                && (!name.hasPrefix(".") || start.hasPrefix("."))
+        }.sorted { $0.modified > $1.modified }.first { entry in
+            guard !entry.isFolder else { return true }
+            let url = URL(fileURLWithPath: folder).appendingPathComponent(entry.name)
+            if case .index = Rules.classify(byName: url, options: options) {
+                return true
+            }
+            return false
+        }
+        return entry.map { String(query.dropLast(typed.count)) + $0.name + ($0.isFolder ? "/" : "") }
+    }
+
+    /// What's in a folder for `completion`: its folders (apps and bundles count as files) and files.
+    public static func entries(in folder: String) -> [Entry] {
+        let keys: Set<URLResourceKey> = [.isDirectoryKey, .isPackageKey, .contentModificationDateKey]
+        let urls = (try? FileManager.default.contentsOfDirectory(at: URL(fileURLWithPath: folder),
+                                                                includingPropertiesForKeys: Array(keys))) ?? []
+        return urls.map { url in
+            let values = try? url.resourceValues(forKeys: keys)
+            return Entry(name: url.lastPathComponent, isFolder: values?.isDirectory == true && values?.isPackage != true,
+                         modified: values?.contentModificationDate ?? .distantPast)
+        }
+    }
+}

@@ -13,7 +13,7 @@ import SwiftUI
 ///     -debugKeys "down,space,esc,cmd+c"   then press these keys (posted through the app's own event queue, so
 ///                             no Accessibility permission is needed) and log what each one did. ⌘C goes to a
 ///                             private pasteboard. Keys: down, up, left, right, space, esc, return, cmd+c,
-///                             cmd+y, cmd+o, cmd+1, cmd+2, cmd+comma, cmd+l, cmd+s, cmd+backspace and letters;
+///                             cmd+y, cmd+o, cmd+1, cmd+2, cmd+comma, cmd+l, cmd+s, cmd+backspace, tab, letters;
 ///                             `settings`, `window` and `panel` open those, `wait` waits. Each goes to the window
 ///                             that has the keyboard. With -debugWindow search they test the window instead.
 ///     -debugType "a|b c"      then type each query (|-separated) into the field, one key every
@@ -673,7 +673,7 @@ enum DebugHooks {
             "cmd+y": (16, "y", .command), "left": (123, "\u{F702}", []), "right": (124, "\u{F703}", []),
             "cmd+1": (18, "1", .command), "cmd+2": (19, "2", .command), "cmd+o": (31, "o", .command),
             "cmd+comma": (43, ",", .command), "cmd+l": (37, "l", .command), "cmd+s": (1, "s", .command),
-            "cmd+backspace": (51, "\u{7F}", .command),
+            "cmd+backspace": (51, "\u{7F}", .command), "tab": (48, "\t", []),
         ]
         var entry = table[name]
         if entry == nil, name.count == 1, let code = letterCodes[name] { entry = (code, name, []) }

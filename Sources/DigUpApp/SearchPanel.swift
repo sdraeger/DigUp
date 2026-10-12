@@ -91,7 +91,7 @@ final class SearchPanelController {
     /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded (or
     /// the saved searches, while the field is empty).
     var rowIDs: [String] {
-        if phase == .empty { return saved.prefix(Self.savedRowsShown).map { Self.savedRow + $0 } }
+        if phase == .empty { return isLike ? [] : saved.prefix(Self.savedRowsShown).map { Self.savedRow + $0 } }
         return results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
@@ -177,7 +177,10 @@ final class SearchPanelController {
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         // A file dropped into the field leaves its path there: search by it.
         if Self.isFilePath(typed) { return query = LikeQuery.query((typed as NSString).expandingTildeInPath) }
-        if let path = LikeQuery.path(of: typed) { return searchLike(path, generation: current) }
+        if LikeQuery.isLike(typed) {
+            guard let path = LikeQuery.path(of: typed), Self.isFilePath(path) else { return typingLike() }
+            return searchLike(path, generation: current)
+        }
         isLike = false
         let codeText = CodeQuery.text(of: typed)
         isCode = codeText != nil
@@ -240,6 +243,17 @@ final class SearchPanelController {
         var folder: ObjCBool = false
         return FileManager.default.fileExists(atPath: (text as NSString).expandingTildeInPath, isDirectory: &folder)
             && !folder.boolValue
+    }
+
+    /// "like:" with its path still being typed: the field alone, where the path's completion shows (`SearchField`).
+    private func typingLike() {
+        isLike = true
+        isCode = false
+        results = .empty
+        selection = nil
+        phase = .empty
+        resizeWindow()
+        onFinalResults?()
     }
 
     /// "like: …": the files most like it, by meaning alone (`Engine.similar`).
@@ -371,6 +385,7 @@ final class SearchPanelController {
             navigated = true
             return true
         case 36, 76:  // ↩, enter
+            if isLike, phase == .empty { return false }   // the field's: it takes the path's completion
             if selection == Self.weakerToggle, modifiers.isEmpty {
                 toggleWeaker()
             } else if modifiers == .command {
@@ -525,10 +540,14 @@ final class SearchPanelController {
     static let savedRowsShown = 8
     static let savedRowHeight: CGFloat = 30
 
-    /// An empty field: the field alone, or with the saved searches under it.
+    /// An empty field: the field alone, or with the saved searches under it. A path being typed after "like:": the
+    /// field alone.
     private var desiredHeight: CGFloat {
-        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Self.expandedHeight }
-        let rows = min(saved.count, Self.savedRowsShown)
+        let typingLike = isLike && phase == .empty
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || typingLike else {
+            return Self.expandedHeight
+        }
+        let rows = typingLike ? 0 : min(saved.count, Self.savedRowsShown)
         return rows == 0 ? Self.fieldHeight : Self.fieldHeight + 40 + CGFloat(rows) * Self.savedRowHeight
     }
 
