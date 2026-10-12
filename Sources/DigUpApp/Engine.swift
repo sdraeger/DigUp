@@ -111,6 +111,10 @@ nonisolated final class Engine: @unchecked Sendable {
     /// restarted.
     private var syncWantedAt: Date?
     private var lastSearcherRefresh = Date.distantPast
+    /// The index changed since the searchers last reloaded their vectors: an idle helper or one that exited reloads
+    /// them only then (a reload reads every vector, ~30 MB per 20k).
+    private var searcherStale = false
+    private var codeSearcherStale = false
 
     /// Code search: the code index once code has been quiet this long (a file being edited changes on every save, a
     /// branch switch or a build changes many at once), or at least this often while it keeps changing.
@@ -593,6 +597,7 @@ nonisolated final class Engine: @unchecked Sendable {
                started >= wanted.timeIntervalSince1970 {
                 syncWantedAt = nil
             }
+            if int("added") + int("changed") + int("moved") + int("removed") > 0 { searcherStale = true }
             applyCounts(event)
             if int("new") > 0 { update { $0.activity = .indexing(done: 0, total: int("new")) } }
             log("sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
@@ -604,9 +609,11 @@ nonisolated final class Engine: @unchecked Sendable {
                 log(String(format: "index: %@ %@ in %.2f s", (path as NSString).lastPathComponent,
                            event["state"] as? String ?? "?", event["seconds"] as? Double ?? 0))
             }
+            searcherStale = true
             refreshSearcher(force: false)
         case "rest":
             update { $0.activity = .finishing(done: int("done"), total: int("total"), files: int("files")) }
+            searcherStale = true
             refreshSearcher(force: false)
         case "summary":
             let states = (event["states"] as? [String: Int] ?? [:]).sorted { $0.key < $1.key }
@@ -617,7 +624,7 @@ nonisolated final class Engine: @unchecked Sendable {
         case "idle":
             applyCounts(event)
             update { $0.activity = .idle }
-            refreshSearcher(force: true)
+            if searcherStale { refreshSearcher(force: true) }
         case "waiting":
             applyCounts(event)
             update {
@@ -639,6 +646,7 @@ nonisolated final class Engine: @unchecked Sendable {
         case "rescan":
             log("indexer: reading \(int("files")) files again that DigUp reads better now (scans' words, SVGs)")
         case "pruned":
+            searcherStale = true
             log("indexer: \(int("files")) files under folders no longer chosen left the index")
         case "reindex":
             log("indexer: the model or settings changed, indexing everything again (was: \(event["from"] as? String ?? "?"))")
@@ -656,19 +664,21 @@ nonisolated final class Engine: @unchecked Sendable {
         switch event["event"] as? String {
         case "sync":
             applyCounts(event)
+            if int("added") + int("changed") + int("moved") + int("removed") > 0 { codeSearcherStale = true }
             // New code is read right away only when the main index has nothing waiting; else it waits its turn.
             if int("new") > 0, int("pending") == 0 { update { $0.code.indexing = .init(done: 0, total: int("new")) } }
             log("code sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
                 + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
         case "file":
             update { $0.code.indexing = .init(done: int("done"), total: int("total")) }
+            codeSearcherStale = true
             refreshCodeSearcher(force: false)
         case "summary":
             let states = (event["states"] as? [String: Int] ?? [:]).sorted { $0.key < $1.key }
                 .map { "\($0.value) \($0.key)" }.joined(separator: " · ")
             log("index: code: \(states) in \(int("ms")) ms")
             update { $0.code.indexing = nil }
-            refreshCodeSearcher(force: true)
+            if codeSearcherStale { refreshCodeSearcher(force: true) }
         case "missing":
             let folders = event["folders"] as? [String] ?? []
             let unreadable = event["unreadable"] as? [String] ?? []
@@ -681,6 +691,7 @@ nonisolated final class Engine: @unchecked Sendable {
         case "stopped":
             log("indexer: skipped \(tildePath(event["path"] as? String ?? "?")): it \(event["why"] as? String ?? "")")
         case "pruned":
+            codeSearcherStale = true
             log("indexer: \(int("files")) files under code folders no longer chosen left the code index")
         case "reindex":
             log("indexer: the model changed, the code index starts over")
@@ -722,8 +733,8 @@ nonisolated final class Engine: @unchecked Sendable {
             if case .starting = $0.activity { $0.activity = .idle }
             $0.code.indexing = nil
         }
-        refreshSearcher(force: true)
-        refreshCodeSearcher(force: true)
+        if searcherStale { refreshSearcher(force: true) }
+        if codeSearcherStale { refreshCodeSearcher(force: true) }
         returnFreedMemory()
         removeCodeIndexIfAsked()
         if restartHelper {
@@ -747,6 +758,7 @@ nonisolated final class Engine: @unchecked Sendable {
     private func refreshSearcher(force: Bool) {
         guard force || Date().timeIntervalSince(lastSearcherRefresh) > 2 else { return }
         lastSearcherRefresh = Date()
+        if force { searcherStale = false }   // a reload while indexing can miss the second not yet saved
         searchQueue.async { [self] in
             guard let searcher, searcher.vectorsLoaded else { return }
             let started = Date()
@@ -761,6 +773,7 @@ nonisolated final class Engine: @unchecked Sendable {
     private func refreshCodeSearcher(force: Bool) {
         guard force || Date().timeIntervalSince(lastCodeRefresh) > 2 else { return }
         lastCodeRefresh = Date()
+        if force { codeSearcherStale = false }
         searchQueue.async { [self] in
             guard let codeSearcher, codeSearcher.vectorsLoaded else { return }
             try? codeSearcher.reload()
