@@ -221,7 +221,7 @@ final class IndexService: @unchecked Sendable {
                 "code": part.code,
                 "new": newFiles.count,   // about to be indexed, whatever the power source
                 "added": summary.added, "changed": summary.changed, "moved": summary.moved,
-                "removed": summary.removed, "unchanged": summary.unchanged,
+                "removed": summary.removed, "unchanged": summary.unchanged, "deferred": summary.deferred,
                 "ms": Int(Date().timeIntervalSince(started) * 1000),
                 "started": started.timeIntervalSince1970,   // the app checks its sync request came before this
             ])

@@ -416,6 +416,7 @@ func indexService(_ args: Arguments) throws -> Int32 {
         let store = try IndexStore(directory: args.indexFolder, file: file)
         let indexer = try Indexer(store: store, options: options, makeEmbedder: { try model.embedder() })
         indexer.costsFolder = args.indexFolder   // what indexing costs here, for later estimates
+        indexer.settle = options.code ? 0 : 30   // the app waits for code to go quiet itself (`codeQuietSeconds`)
         // A new app version may bring a new model: the index starts over by itself (keyword search on names goes on).
         indexer.embedderSource = embedderSource()
         indexer.resetOnModelChange = { indexed, now in

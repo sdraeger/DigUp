@@ -19,6 +19,8 @@ public enum IndexerError: Error, CustomStringConvertible {
 public final class Indexer {
     public struct SyncSummary: Sendable {
         public var added = 0, changed = 0, moved = 0, removed = 0, unchanged = 0
+        /// Changed files left for a later sync: changed less than `settle` seconds ago.
+        public var deferred = 0
         public var crawl: CrawlReport
         /// Files this sync queued for embedding (new or changed), so a watcher can index exactly those first.
         public var queued: [Int64] = []
@@ -82,6 +84,9 @@ public final class Indexer {
     }
 
     public var workerIsRunning: Bool { worker != nil }
+    /// A changed file waits until it hasn't changed for this long (0: at once). A document that saves itself every few
+    /// seconds while it's open was embedded again after every save; now it's embedded once it's put down.
+    public var settle: Double = 0
 
     // MARK: Sync
 
@@ -108,7 +113,10 @@ public final class Indexer {
                     let pictures: Set<FileKind> = [.screenshot, .image]
                     let kindChanged = row.kind != file.kind
                         && !(pictures.contains(row.kind) && pictures.contains(file.kind))
-                    if row.size != file.size || abs(row.mtime - file.mtime) > 0.001 || kindChanged {
+                    let changed = row.size != file.size || abs(row.mtime - file.mtime) > 0.001
+                    if changed, !kindChanged, Date().timeIntervalSince1970 - file.mtime < settle {
+                        summary.deferred += 1   // its row stays as it was, so the next sync sees the change again
+                    } else if changed || kindChanged {
                         try store.requeue(row.id, as: file)
                         summary.changed += 1
                         summary.queued.append(row.id)

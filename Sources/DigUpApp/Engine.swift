@@ -115,6 +115,8 @@ nonisolated final class Engine: @unchecked Sendable {
     /// them only then (a reload reads every vector, ~30 MB per 20k).
     private var searcherStale = false
     private var codeSearcherStale = false
+    /// The sync after files that were still being written have settled (`Indexer.settle`).
+    private var settledSync: DispatchWorkItem?
 
     /// Code search: the code index once code has been quiet this long (a file being edited changes on every save, a
     /// branch switch or a build changes many at once), or at least this often while it keeps changing.
@@ -598,10 +600,17 @@ nonisolated final class Engine: @unchecked Sendable {
                 syncWantedAt = nil
             }
             if int("added") + int("changed") + int("moved") + int("removed") > 0 { searcherStale = true }
+            if int("deferred") > 0 {
+                settledSync?.cancel()
+                let work = DispatchWorkItem { [self] in requestSync() }
+                settledSync = work
+                indexQueue.asyncAfter(deadline: .now() + 31, execute: work)   // the helper's settle, and a second
+            }
             applyCounts(event)
             if int("new") > 0 { update { $0.activity = .indexing(done: 0, total: int("new")) } }
             log("sync: \(int("added")) new · \(int("changed")) changed · \(int("moved")) moved · "
-                + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms")
+                + "\(int("removed")) removed · \(int("unchanged")) unchanged in \(int("ms")) ms"
+                + (int("deferred") > 0 ? " · \(int("deferred")) still changing" : ""))
         case "file":
             let (done, total) = (int("done"), int("total"))
             update { $0.activity = .indexing(done: done, total: total) }

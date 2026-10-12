@@ -133,6 +133,23 @@ import Testing
         #expect(again.changed == 0 && again.unchanged == 1)
     }
 
+    /// A file that changed moments ago (a document saving itself while it's open) waits for a later sync.
+    @Test func aFileStillChangingWaits() throws {
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        let note = files.appendingPathComponent("draft.txt")
+        try "Otters.".write(to: note, atomically: true, encoding: .utf8)
+        let indexer = try indexer(try store(), FakeEmbedder())
+        indexer.settle = 30
+        #expect(try indexer.sync([files]).added == 1)   // new files don't wait
+        try "Otters and their dens.".write(to: note, atomically: true, encoding: .utf8)
+        let now = try indexer.sync([files])
+        #expect(now.changed == 0 && now.deferred == 1)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -60)],
+                                              ofItemAtPath: note.path)
+        let later = try indexer.sync([files])
+        #expect(later.changed == 1 && later.deferred == 0)
+    }
+
     /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
     /// deleted would embed every file again once access is back.
     @Test func anUnreadableFolderKeepsItsFiles() throws {
