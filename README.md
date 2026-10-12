@@ -35,6 +35,8 @@ whatever kind of file it is. All of it happens on your Mac.
 - a saved search keeps watching: save "receipts" with ⌘S, and DigUp tells you when a new file matches it
 - a search can say when and what: "PDFs from March about the lease", "photos from last summer", "screenshots from
   yesterday" (when a file changed, or when a photo was taken)
+- a question gets an answer: "when does my lease end?" is answered from your files, citing the pages it read, by
+  Apple's on-device model (macOS 26 with Apple Intelligence; it stays on your Mac)
 - "duplicate photos" or "copies of the lease" finds copies: the same file twice, a resized or re-saved picture, a
   re-exported PDF. DigUp only shows them; it never deletes anything
 

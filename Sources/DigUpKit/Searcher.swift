@@ -552,6 +552,19 @@ public final class Searcher {
         return text
     }
 
+    /// A question's passage (`Question`): the text of `segment` (a page, a passage, a screenshot's words), else its
+    /// file's text at the same place (a scanned page's), else its file's first (the words in a screenshot whose picture
+    /// matched). Nil for a file with none.
+    public func passage(near segment: Int64) throws -> String? {
+        var text: String?
+        try store.db.query("""
+            SELECT coalesce(fts.original, fts.body) FROM fts JOIN segments s ON s.id = fts.rowid
+            WHERE s.file = (SELECT file FROM segments WHERE id = ?) AND s.kind != 'name'
+            ORDER BY s.id = ? DESC, s.loc = (SELECT loc FROM segments WHERE id = ?) DESC, s.id LIMIT 1
+            """, [.int(segment), .int(segment), .int(segment)]) { text = $0.text(0) }
+        return text
+    }
+
     static let stopwords: Set<String> = [
         "a", "an", "the", "of", "in", "on", "at", "to", "for", "with", "and", "or", "my", "me", "that", "this",
         "these", "those", "from", "about", "where", "what", "which", "who", "when", "is", "was", "are", "were", "be",

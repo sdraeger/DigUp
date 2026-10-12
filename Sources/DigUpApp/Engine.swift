@@ -884,6 +884,26 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
+    /// A question's sources (`Question`): the passages of its best results, up to `Question.maxSources`, skipping
+    /// results with no text (a photo, a recording).
+    func sources(for hits: [SearchHit], question: String) async -> [(hit: SearchHit, source: Question.Source)] {
+        let terms = Searcher.terms(QueryFilter(question).text)
+        return await withCheckedContinuation { continuation in
+            searchQueue.async { [self] in
+                var sources: [(hit: SearchHit, source: Question.Source)] = []
+                for hit in hits where sources.count < Question.maxSources {
+                    guard let text = (try? searcher?.passage(near: hit.segmentID)) ?? nil, !text.isEmpty else {
+                        continue
+                    }
+                    let page = [.page, .pageImage].contains(hit.segment) ? hit.loc.map { ", page \(Int($0))" } : nil
+                    let title = (hit.path as NSString).lastPathComponent + (page ?? "")
+                    sources.append((hit, Question.Source(title: title, text: Question.passage(text, terms: terms))))
+                }
+                continuation.resume(returning: sources)
+            }
+        }
+    }
+
     /// Kinds both allow (nil: any).
     private static func both(_ a: Set<FileKind>?, _ b: Set<FileKind>?) -> Set<FileKind>? {
         guard let a, let b else { return a ?? b }

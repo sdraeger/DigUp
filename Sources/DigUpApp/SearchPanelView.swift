@@ -110,6 +110,8 @@ struct SearchPanelView: View {
                         }
                     } else if controller.selection == SearchPanelController.weakerToggle {
                         WeakerExplainer(count: controller.results.weaker.count, expanded: controller.showWeaker)
+                    } else if controller.selection == SearchPanelController.answerRow, let answer = controller.answer {
+                        AnswerPane(answer: answer, cite: { controller.showSource($0) })
                     }
                 }
                 .padding(16)
@@ -168,6 +170,7 @@ struct SearchPanelView: View {
                 : (count == 1 ? "1 result" : "\(count) results")
             return found + (controller.isCode ? " in your code" : controller.isLike ? " like it" : "")
                 + (weaker > 0 ? " · \(weaker) weaker" : "") + (controller.filterSummary.map { " · \($0)" } ?? "")
+                + (controller.answer.map { $0.done ? "" : " · Answering on this Mac…" } ?? "")
         }
     }
 }
@@ -179,6 +182,11 @@ private struct ResultList: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
+                    if let answer = controller.answer {
+                        AnswerRow(answer: answer, selected: controller.selection == SearchPanelController.answerRow)
+                            .id(SearchPanelController.answerRow)
+                            .onTapGesture { controller.selectAnswer() }
+                    }
                     ForEach(controller.results.groups) { group in
                         GroupHeader(title: group.title)
                         ForEach(group.rows) { row in
@@ -333,6 +341,106 @@ private struct PanelRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel("\(row.kind.title), \(row.name), \(row.reason)")
         .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+}
+
+/// A question's answer as a row above the results: what it says so far.
+private struct AnswerRow: View {
+    let answer: SearchPanelController.Answer
+    let selected: Bool
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(Brand.gradient)
+                .frame(width: 36, height: 36)
+                .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(0.06)))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Answer").font(.system(size: 13, weight: .semibold))
+                Text(answer.problem ?? (answer.text.isEmpty ? "Reading your files…" : AnswerPane.plain(answer.text)))
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous)
+            .fill(selected ? Color.accentColor.opacity(0.24) : Color.clear))
+        .contentShape(Rectangle())
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(selected ? [.isSelected, .isButton] : .isButton)
+    }
+}
+
+/// The answer, written as it comes, its citations links to the results they cite (at the page that was read), and the
+/// files it was read from.
+private struct AnswerPane: View {
+    let answer: SearchPanelController.Answer
+    /// A citation clicked: 1 for [1].
+    let cite: (Int) -> Void
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 6) {
+                    Image(systemName: "sparkles").foregroundStyle(Brand.gradient)
+                    Text("Answer").font(.system(size: 13, weight: .semibold))
+                    if !answer.done { ProgressView().controlSize(.small) }
+                }
+                if let problem = answer.problem {
+                    Text(problem).font(.system(size: 13)).foregroundStyle(.secondary)
+                } else {
+                    Text(Self.linked(answer.text.isEmpty ? "…" : answer.text))
+                        .font(.system(size: 14))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .environment(\.openURL, OpenURLAction { url in
+                            Int(url.host ?? "").map(cite)
+                            return .handled
+                        })
+                }
+                if !answer.sources.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(Array(answer.sources.enumerated()), id: \.offset) { index, row in
+                            Button { cite(index + 1) } label: {
+                                HStack(spacing: 6) {
+                                    Text("\(index + 1)")
+                                        .font(.system(size: 10, weight: .bold).monospacedDigit())
+                                        .frame(width: 16, height: 16)
+                                        .background(Circle().fill(Color.primary.opacity(0.1)))
+                                    Text(row.title).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                                    if let place = row.place { PlaceBadge(text: place) }
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .help("Show this file at what was read")
+                        }
+                    }
+                }
+                Text("Written on this Mac by Apple's model from these files; check what matters.")
+                    .font(.system(size: 10.5))
+                    .foregroundStyle(.tertiary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    /// "[1]" made a link that shows that source.
+    static func linked(_ text: String) -> AttributedString {
+        let markdown = text.replacingOccurrences(of: #"\[(\d+)\]"#, with: "[[$1]](source://$1)",
+                                                 options: .regularExpression)
+        let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        return (try? AttributedString(markdown: markdown, options: options)) ?? AttributedString(text)
+    }
+
+    /// The answer's text without its citations, for the row.
+    static func plain(_ text: String) -> String {
+        text.replacingOccurrences(of: #"\s*\[\d+\]"#, with: "", options: .regularExpression)
     }
 }
 

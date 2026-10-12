@@ -32,6 +32,8 @@ final class SearchPanelController {
     static let fadeOut: TimeInterval = 0.12
     /// The selectable row that folds and unfolds the weaker matches.
     static let weakerToggle = "\u{0}weaker"
+    /// A question's answer (`Question`), the row above the results.
+    static let answerRow = "\u{0}answer"
     /// A saved search's row, in the list an empty field shows: this, then the query.
     static let savedRow = "\u{1}"
 
@@ -62,6 +64,18 @@ final class SearchPanelController {
     /// The generation whose final (meaning) results are showing; late keyword results must not replace them.
     @ObservationIgnored private var finalGeneration = -1
     @ObservationIgnored private var meaningTask: Task<Void, Never>?
+    @ObservationIgnored private var answerTask: Task<Void, Never>?
+
+    /// A question's answer (`Answering`), written as it comes, citing `sources` as [1], [2]…
+    struct Answer: Equatable {
+        var text = ""
+        var sources: [ResultRow] = []
+        var done = false
+        /// Why there's no answer (no model, nothing to read, an error).
+        var problem: String?
+    }
+
+    private(set) var answer: Answer?
     @ObservationIgnored private var keyMonitor: Any?
     @ObservationIgnored private var mouseMonitor: Any?
     @ObservationIgnored private var resignObserver: NSObjectProtocol?
@@ -94,7 +108,7 @@ final class SearchPanelController {
     /// the saved searches, while the field is empty).
     var rowIDs: [String] {
         if phase == .empty { return isLike ? [] : saved.prefix(Self.savedRowsShown).map { Self.savedRow + $0 } }
-        return results.groups.flatMap { $0.rows.map(\.id) }
+        return (answer == nil ? [] : [Self.answerRow]) + results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
     }
@@ -176,6 +190,8 @@ final class SearchPanelController {
         typedAt = Date()
         navigated = false
         meaningTask?.cancel()
+        answerTask?.cancel()
+        answer = nil
         isDuplicates = false
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         // A file dropped into the field leaves its path there: search by it.
@@ -239,8 +255,53 @@ final class SearchPanelController {
                 // The next turn of the main loop: the list and the preview pane have been laid out and drawn.
                 log("search \"\(typed)\": drawn by \(ms(since: keystroke)) after the last keystroke")
             }
+            if !code, Question.isQuestion(typed) { return ask(typed, hits: hits, generation: current) }
             onFinalResults?()
         }
+    }
+
+    /// A question: answered from the passages of its best results, above them, as the answer is written.
+    private func ask(_ question: String, hits: [SearchHit], generation current: Int) {
+        answer = Answer()
+        if !navigated { selection = Self.answerRow }
+        answerTask = Task {
+            defer { if current == generation { onFinalResults?() } }
+            if let problem = Answering.unavailable { return answer = Answer(done: true, problem: problem) }
+            let started = Date()
+            // Weaker results too: a question that asks two things can need one of them.
+            let sources = await engine.sources(for: hits, question: question)
+            guard !Task.isCancelled, current == generation else { return }
+            guard !sources.isEmpty else {
+                return answer = Answer(done: true, problem: "None of the results has words to answer from.")
+            }
+            answer?.sources = sources.map { ResultRow($0.hit, terms: Searcher.terms(question)) }
+            do {
+                for try await text in Answering.answer(question, sources: sources.map(\.source)) {
+                    guard !Task.isCancelled, current == generation else { return }
+                    answer?.text = text
+                }
+                answer?.done = true
+                log("answer \"\(question)\": \(answer?.text.count ?? 0) characters from \(sources.count) sources in "
+                    + ms(since: started))
+            } catch {
+                guard current == generation else { return }
+                answer?.problem = Answering.problem(error)
+                answer?.done = true
+                log("answer \"\(question)\": \(error)")
+            }
+        }
+    }
+
+    func selectAnswer() {
+        selection = Self.answerRow
+        navigated = true
+    }
+
+    /// A citation in the answer ([1] is 1): its source, at the page that was read.
+    func showSource(_ number: Int) {
+        guard let sources = answer?.sources, sources.indices.contains(number - 1) else { return }
+        if results.weaker.contains(where: { $0.id == sources[number - 1].id }) { showWeaker = true }
+        select(sources[number - 1])
     }
 
     /// A path to a file, and nothing else (what a file dropped into the field leaves).
@@ -492,6 +553,11 @@ final class SearchPanelController {
     }
 
     func copySelected() {
+        if selection == Self.answerRow, let text = answer?.text, !text.isEmpty {
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+            return flash("Copied the answer")
+        }
         guard let row = selectedRow else { return }
         pasteboard.clearContents()
         // As a file, like ⌘C in Finder: paste into a folder, a chat or a mail.
