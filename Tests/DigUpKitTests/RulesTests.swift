@@ -3,12 +3,16 @@ import Foundation
 import Testing
 @testable import DigUpKit
 
-@Suite struct RulesTests {
+@Suite final class RulesTests {
     let folder: URL = {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("DigUpTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
+
+    deinit {
+        try? FileManager.default.removeItem(at: folder)
+    }
 
     @Test func mediaStaysInMemoryUpToItsBudget() throws {
         let sink = MediaSink(folder: folder, budget: 10)
