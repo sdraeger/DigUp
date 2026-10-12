@@ -119,12 +119,15 @@ public final class Indexer {
                     summary.added += 1
                 }
             }
-            // A root that went away while it was being walked (a drive ejected mid-crawl) looked emptier than it is:
-            // keep its rows rather than take that for "deleted".
+            // A root that went away while it was being walked (a drive ejected mid-crawl), a folder it couldn't read
+            // (access not granted yet) and files only in the cloud looked like less than there is: keep their rows
+            // rather than take that for "deleted".
             let vanished = roots.map { $0.standardizedFileURL.path }
                 .filter { !FileManager.default.fileExists(atPath: $0) }.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+                + crawl.unreadable.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            let inCloud = Set(crawl.inCloud)
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)
-                && !vanished.contains(where: { row.path.hasPrefix($0) }) {
+                && !inCloud.contains(row.path) && !vanished.contains(where: { row.path.hasPrefix($0) }) {
                 try store.delete(row.id)
                 summary.removed += 1
             }

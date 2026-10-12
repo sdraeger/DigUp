@@ -73,6 +73,24 @@ import Testing
         #expect(try found(app, "otters").count == 6)
     }
 
+    /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
+    /// deleted would embed every file again once access is back.
+    @Test func anUnreadableFolderKeepsItsFiles() throws {
+        let locked = files.appendingPathComponent("Locked")
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try "Field notes about otters.".write(to: files.appendingPathComponent("open.txt"), atomically: true, encoding: .utf8)
+        try "Private notes about otters.".write(to: locked.appendingPathComponent("hidden.txt"), atomically: true,
+                                               encoding: .utf8)
+        let store = try store()
+        let indexer = try indexer(store, FakeEmbedder())
+        #expect(try indexer.sync([files]).added == 2)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        let summary = try indexer.sync([files])
+        #expect(summary.removed == 0)
+        #expect(try store.files(under: [files.path]).count == 2)
+    }
+
     @Test func longPDFIsReadInSteps() throws {
         let pdf = try makePDF("Field guide.pdf", pages: 120, special: [100: "quokka"])
         let store = try store()

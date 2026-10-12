@@ -15,6 +15,11 @@ public struct CrawlReport: Sendable {
     public var skipped: [String: Int] = [:]          // reason → files
     public var skippedFolders: [String: Int] = [:]   // reason → folders not walked into
     public var datasets: [String: Int] = [:]         // folder → files skipped as a dataset
+    /// What the walk couldn't see but is still there: folders it couldn't read (no permission, or macOS hasn't asked
+    /// yet) and files only in the cloud. A sync keeps their rows rather than take them for deleted, which would
+    /// embed them all again once they're back.
+    public var unreadable: [String] = []
+    public var inCloud: [String] = []
 }
 
 /// Walks the chosen folders and applies `Rules`. Reads metadata only, never file contents (except the 600-byte
@@ -32,6 +37,7 @@ public enum Crawler {
         var repos = GitRepos()
         var found: [Candidate] = []
         var foundPaths = Set<String>()   // a folder inside another root would be walked twice
+        let unreadable = NSMutableArray()   // the walk's error handler escapes
         let rootPaths = Set(roots.map { $0.standardizedFileURL.path })
 
         for root in roots.map({ $0.standardizedFileURL }) {
@@ -51,7 +57,8 @@ public enum Crawler {
             #else
             guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                              options: [.skipsHiddenFiles, .skipsPackageDescendants],
-                                             errorHandler: { _, _ in true }) else { continue }
+                                             errorHandler: { url, _ in unreadable.add(url.path); return true })
+            else { continue }
             #endif
             func visit(_ url: URL) {
                 let values = try? url.resourceValues(forKeys: Set(keys))
@@ -88,6 +95,7 @@ public enum Crawler {
                     // Reading a dataless placeholder (iCloud "Optimize Mac Storage", File Providers) downloads it.
                     if info.dataless || FileSystem.isInCloud(values) {
                         report.skipped["in the cloud, not downloaded", default: 0] += 1
+                        report.inCloud.append(url.path)
                         return
                     }
                     if options.code {
@@ -152,6 +160,7 @@ public enum Crawler {
             }
         }
         report.candidates = kept
+        report.unreadable = unreadable.compactMap { $0 as? String }
         return report
     }
 }
