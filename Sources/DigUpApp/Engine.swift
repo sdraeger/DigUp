@@ -795,8 +795,8 @@ nonisolated final class Engine: @unchecked Sendable {
         indexQueue.async { [self] in
             if helper != nil {
                 send(reason == nil ? "backfill on" : "backfill off")
-            } else if reason == nil {
-                startHelper()
+            } else if reason == nil, lock.withLock({ status.pending + status.unfinished + status.code.pending }) > 0 {
+                startHelper()   // only for work that waited: plugging in or cooling down isn't a reason to crawl
             }
         }
     }
