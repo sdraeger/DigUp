@@ -87,6 +87,11 @@ public struct WorkerConfig: Sendable {
     /// The worker process's priority: user-initiated for the query encoder (App Nap and efficiency cores can slow
     /// a search from 125 to 650 ms), utility for background indexing.
     public var qos: QualityOfService = .default
+    /// How long the worker may take to load the model (its "ready" line), then to answer a request (plus 5 s an input:
+    /// a video's frames go in one request). A worker that takes longer is taken for hung (a GPU hang) and stopped, and
+    /// the call throws.
+    public var startTimeout: TimeInterval = 300
+    public var replyTimeout: TimeInterval = 60
 
     public init(executable: URL, arguments: [String]) {
         self.executable = executable
@@ -155,6 +160,7 @@ public final class EmbeddingWorker: Embedder {
     private var buffer = Data()
     private var nextID = 1
     private let log: URL?
+    private let replyTimeout: TimeInterval
 
     private struct Request: Encodable {
         let id: Int
@@ -182,6 +188,7 @@ public final class EmbeddingWorker: Embedder {
         process.standardInput = input
         process.standardOutput = output
         log = config.log
+        replyTimeout = config.replyTimeout
         if let log = config.log {
             FileManager.default.createFile(atPath: log.path, contents: nil)
             process.standardError = try FileHandle(forWritingTo: log)
@@ -189,7 +196,7 @@ public final class EmbeddingWorker: Embedder {
             process.standardError = FileHandle.nullDevice
         }
         try process.run()
-        let ready = try readReply()
+        let ready = try readReply(within: config.startTimeout)
         guard ready.ready == true, let info = ready.info else {
             throw WorkerError.failed(ready.error ?? "didn't start\(logTail())")
         }
@@ -233,7 +240,7 @@ public final class EmbeddingWorker: Embedder {
         } catch {
             throw WorkerError.died("can't write to the worker\(logTail())")
         }
-        let reply = try readReply()
+        let reply = try readReply(within: replyTimeout + 5 * Double(inputs.count))
         guard reply.id == id else { throw WorkerError.failed("reply out of order") }
         guard reply.ok == true, let encoded = reply.vectors, let data = Data(base64Encoded: encoded) else {
             throw WorkerError.failed(reply.error ?? "no vectors")
@@ -249,7 +256,8 @@ public final class EmbeddingWorker: Embedder {
         }
     }
 
-    private func readReply() throws -> Reply {
+    private func readReply(within seconds: TimeInterval) throws -> Reply {
+        let deadline = Date().addingTimeInterval(seconds)
         while true {
             if let newline = buffer.firstIndex(of: 0x0A) {
                 let line = buffer[buffer.startIndex..<newline]
@@ -258,6 +266,14 @@ public final class EmbeddingWorker: Embedder {
                 let decoder = JSONDecoder()
                 decoder.keyDecodingStrategy = .convertFromSnakeCase
                 return try decoder.decode(Reply.self, from: line)
+            }
+            // `availableData` alone would wait forever for a hung worker.
+            var pipe = pollfd(fd: output.fileHandleForReading.fileDescriptor, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pipe, 1, Int32(max(0, deadline.timeIntervalSinceNow) * 1000))
+            if ready < 0, errno == EINTR { continue }
+            guard ready > 0 else {
+                process.terminate()
+                throw WorkerError.died("no answer in \(Int(seconds)) s\(logTail())")
             }
             let chunk = output.fileHandleForReading.availableData
             guard !chunk.isEmpty else { throw WorkerError.died("exited\(logTail())") }
