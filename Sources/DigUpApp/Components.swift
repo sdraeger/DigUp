@@ -140,6 +140,7 @@ extension FileKind {
         case .audio: one ? "audio file" : "audio files"
         case .video: one ? "video" : "videos"
         case .code: one ? "code file" : "code files"
+        case .app: one ? "app" : "apps"
         }
         return "\(count.formatted()) \(noun)"
     }

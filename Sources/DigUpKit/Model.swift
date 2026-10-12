@@ -5,6 +5,8 @@ public enum FileKind: String, CaseIterable, Sendable, Codable {
     case screenshot, image, pdf, doc, audio, video
     /// Source code, a repo's docs and notebooks: only in the code index (`IndexOptions.code`).
     case code
+    /// An installed app: found by name or by what it's for (`Apps`), never indexed.
+    case app
 
     /// The order of the first indexing pass: what people look for most comes first.
     static let indexingOrderSQL = """

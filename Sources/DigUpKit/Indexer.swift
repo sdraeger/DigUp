@@ -462,6 +462,8 @@ public final class Indexer {
                 prepared.payload = .video(frames: frames, sound: sound, duration: duration)
             case .code:
                 prepared.payload = .code(try CodeExtractor.read(url, options: options))
+            case .app:
+                break   // never indexed (`Apps`)
             }
         } catch let error as ExtractError {
             if case .leftOut = error {

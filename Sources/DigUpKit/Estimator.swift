@@ -107,6 +107,8 @@ public enum Estimator {
                 estimate.seconds += Double(stretches) * costs.codeStretch
                 estimate.bytes += Double(characters) * CodeIndexSize.perCharacter
                     + Double(stretches) * CodeIndexSize.perStretch
+            case .app:
+                break   // never indexed (`Apps`)
             }
         }
         return estimate

@@ -189,7 +189,7 @@ final class SearchPanelController {
             let started = Date()
             let hits = await engine.search(text, vector: nil, prefixLast: true, code: code)
             guard current == generation, finalGeneration != current else { return }
-            show(hits, query: text, phase: .words)
+            show(hits, apps: code ? [] : engine.apps(text, vector: nil), query: text, phase: .words)
             log("search \"\(typed)\": words \(hits.count) hits in \(ms(since: started))")
         }
         // Meaning results show once typing pauses, but they're computed now (embedding, then search), so they're
@@ -206,10 +206,12 @@ final class SearchPanelController {
             try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
             guard !Task.isCancelled, current == generation else { return }
             finalGeneration = current
-            show(hits, query: text, phase: vector == nil ? .wordsOnly : .meaning)
+            let apps = code ? [] : engine.apps(text, vector: vector)
+            show(hits, apps: apps, query: text, phase: vector == nil ? .wordsOnly : .meaning)
             let shown = Date(), keystroke = typedAt
             log("search \"\(typed)\": \(vector == nil ? "words only" : "meaning") \(hits.count) hits "
-                + "(\(results.strongRows.count) strong) · embed \(ms(since: embedStarted, until: searchStarted)) · "
+                + "(\(results.strongRows.count) strong) · \(apps.count) apps (\(apps.filter(\.byName).count) by name) · "
+                + "embed \(ms(since: embedStarted, until: searchStarted)) · "
                 + "search \(ms(since: searchStarted, until: searched)) · shown \(ms(since: keystroke, until: shown)) after "
                 + "the last keystroke")
             DispatchQueue.main.async {
@@ -220,9 +222,11 @@ final class SearchPanelController {
         }
     }
 
-    private func show(_ hits: [SearchHit], query: String, phase: SearchPhase) {
+    private func show(_ hits: [SearchHit], apps: [(app: InstalledApp, byName: Bool)], query: String,
+                      phase: SearchPhase) {
         // Code is one group: it gets the room of all of them.
-        results = ResultSet(hits, query: query, rowsPerGroup: isCode ? Self.rowsPerGroup * 3 : Self.rowsPerGroup)
+        results = ResultSet(hits, apps: apps, query: query,
+                            rowsPerGroup: isCode ? Self.rowsPerGroup * 3 : Self.rowsPerGroup)
         if !navigated { showWeaker = false }
         // Follow the top hit until you pick something with the arrow keys.
         if !navigated || !rowIDs.contains(where: { $0 == selection }) {

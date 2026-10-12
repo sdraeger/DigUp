@@ -116,7 +116,7 @@ enum Opener {
 
     /// `words`: what to search for in a PDF (`Landmark.find`).
     static func open(_ row: ResultRow, searching words: String?) {
-        guard let app = NSWorkspace.shared.urlForApplication(toOpen: row.url) else {
+        guard row.kind != .app, let app = NSWorkspace.shared.urlForApplication(toOpen: row.url) else {
             if !dryRun { NSWorkspace.shared.open(row.url) }
             return
         }

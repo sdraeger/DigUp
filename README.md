@@ -30,6 +30,7 @@ whatever kind of file it is. All of it happens on your Mac.
 - a search in English can find a note written in Bengali, Arabic or any of the model's 100+ languages, and the other
   way around
 - "code: retry a failed call with backoff" finds the function in your projects, if you turn on code search
+- "photo" finds the Photos app, and "video call" finds FaceTime and Zoom: apps by their name or by what they're for
 
 Exact words count too. Invoice numbers, error codes and names are matched as written, in file names, document text
 and the text inside screenshots, so a search gets both the meaning and the exact string.
@@ -81,7 +82,9 @@ Outside the folders you pick for code search, it never reads code, and inside a 
 `package.json` and the like) it reads only screenshots. It never reads keys, certificates, password files, hidden
 folders like `~/.ssh`, app bundles or caches. It skips folders that look like datasets, and never downloads iCloud
 files that only live in the cloud. You can skip more folders or file types in Settings. DigUp only reads your files;
-it never changes, moves or uploads them.
+it never changes, moves or uploads them. Apps are the one thing outside your folders: the panel lists the names and
+categories of those in `/Applications`, `/System/Applications` and `~/Applications` to open them, and never indexes
+them.
 
 The first pass takes a few minutes for a few hundred files and can take an hour for a big Downloads folder. That
 happens once, on battery too unless you tell it to wait for a charger, and it pauses in Low Power Mode. After that, a

@@ -237,8 +237,8 @@ private struct PanelRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // Code's thumbnail would be a page of tiny text: its file type's icon says more.
-            ThumbnailView(url: row.url, side: 36, iconOnly: row.kind == .code)
+            // Code's thumbnail would be a page of tiny text: its file type's icon says more. An app's is its icon.
+            ThumbnailView(url: row.url, side: 36, iconOnly: row.kind == .code || row.kind == .app)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {
                     Text(row.title)

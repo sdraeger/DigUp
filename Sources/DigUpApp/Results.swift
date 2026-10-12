@@ -49,6 +49,27 @@ struct ResultRow: Identifiable, Equatable {
         self.terms = terms
     }
 
+    /// An installed app (`Apps`): found by its name, or by what it's for (`meaning`).
+    init(app: InstalledApp, meaning: Bool) {
+        id = app.path
+        url = URL(fileURLWithPath: app.path)
+        name = app.name
+        folder = tildePath(url.deletingLastPathComponent().path)
+        kind = .app
+        segment = .name
+        segmentID = 0
+        loc = nil
+        locEnd = nil
+        focus = nil
+        excerpt = nil
+        matchedMeaning = meaning
+        matchedWords = false
+        modified = .distantPast
+        size = 0
+        info = app.category.map { ["category": $0] } ?? [:]
+        terms = []
+    }
+
     /// The name to show: left to right as Finder shows it, also when it starts in Arabic ("ملاحظة.md", not "md.ملاحظة").
     var title: String { "\u{200E}" + name }
 
@@ -96,6 +117,7 @@ struct ResultRow: Identifiable, Equatable {
 
     /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
     var reason: String {
+        if kind == .app { return matchedMeaning ? "Matches what it's for" : "Matches its name" }
         guard matchedMeaning else { return matchedWords ? "Has your words" : "Matches its name" }
         let place = loc.map(Self.clock) ?? ""
         let page = loc.map { "page \(Int($0))" } ?? "a page"
@@ -115,6 +137,9 @@ struct ResultRow: Identifiable, Equatable {
     /// "Screenshot · Oct 1, 2026 · 1440 × 900 · 2.1 MB", "PDF · … · 463 pages, 120 read so far · 23 MB",
     /// "Python · 63 lines · Oct 1, 2026 · 2 KB"
     var details: String {
+        if kind == .app {   // "App · Photography"
+            return ([kind.title] + [info["category"]?.capitalized].compactMap { $0 }).joined(separator: " · ")
+        }
         if kind == .code {
             var parts = [CodeExtractor.language(of: url.path)]
             if let cells = info["cells"].flatMap(Int.init) {
@@ -152,6 +177,8 @@ enum ResultGroupKind: CaseIterable {
     case screenshots, images, documents, video, audio
     /// Code search's results (the code index; a search of it never shows anything else).
     case code
+    /// Installed apps (`Apps`): the panel only.
+    case apps
 
     /// The kinds of files the main index holds: the window's kind filters, ⌘2 to ⌘6.
     static let files: [ResultGroupKind] = [.screenshots, .images, .documents, .video, .audio]
@@ -164,6 +191,7 @@ enum ResultGroupKind: CaseIterable {
         case .video: self = .video
         case .audio: self = .audio
         case .code: self = .code
+        case .app: self = .apps
         }
     }
 
@@ -175,6 +203,7 @@ enum ResultGroupKind: CaseIterable {
         case .video: "Video"
         case .audio: "Audio"
         case .code: "Code"
+        case .apps: "Apps"
         }
     }
 
@@ -186,6 +215,7 @@ enum ResultGroupKind: CaseIterable {
         case .video: FileKind.video.symbol
         case .audio: FileKind.audio.symbol
         case .code: FileKind.code.symbol
+        case .apps: FileKind.app.symbol
         }
     }
 
@@ -197,6 +227,7 @@ enum ResultGroupKind: CaseIterable {
         case .video: [.video]
         case .audio: [.audio]
         case .code: [.code]
+        case .apps: [.app]
         }
     }
 }
@@ -210,7 +241,8 @@ struct ResultGroup: Identifiable, Equatable {
 }
 
 /// Search results the way they're shown: the strong ones grouped by kind (the best hit's group first, as many rows per
-/// group as there's room for), and the weaker ones (below half the top score) folded underneath.
+/// group as there's room for), and the weaker ones (below half the top score) folded underneath. Apps found by name
+/// come first, as in Spotlight; found only by what they're for, after the files.
 struct ResultSet: Equatable {
     var groups: [ResultGroup] = []
     /// The strong ones in score order (the window's grid; the panel shows `groups`).
@@ -221,7 +253,8 @@ struct ResultSet: Equatable {
 
     init() {}
 
-    init(_ hits: [SearchHit], query: String = "", rowsPerGroup: Int = .max) {
+    init(_ hits: [SearchHit], apps: [(app: InstalledApp, byName: Bool)] = [], query: String = "",
+         rowsPerGroup: Int = .max) {
         let strong = Searcher.strongCount(hits)
         let terms = Searcher.terms(query)
         var order: [ResultGroupKind] = []
@@ -236,6 +269,11 @@ struct ResultSet: Equatable {
             ResultGroup(kind: $0, rows: Array(byGroup[$0]!.prefix(rowsPerGroup)), total: byGroup[$0]!.count)
         }
         weaker = hits.dropFirst(strong).map { ResultRow($0, terms: terms) }
+        guard !apps.isEmpty else { return }
+        let rows = apps.prefix(rowsPerGroup).map { ResultRow(app: $0.app, meaning: !$0.byName) }
+        // All of them: the window, where "Show all" goes, has no apps.
+        let group = ResultGroup(kind: .apps, rows: Array(rows), total: rows.count)
+        if apps.contains(where: { $0.byName }) { groups.insert(group, at: 0) } else { groups.append(group) }
     }
 
     var strongRows: [ResultRow] { groups.flatMap(\.rows) }
@@ -253,6 +291,7 @@ extension FileKind {
         case .audio: "Audio"
         case .video: "Video"
         case .code: "Code"
+        case .app: "App"
         }
     }
 
@@ -265,6 +304,7 @@ extension FileKind {
         case .audio: "waveform"
         case .video: "film"
         case .code: "chevron.left.forwardslash.chevron.right"
+        case .app: "app"
         }
     }
 }

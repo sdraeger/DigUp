@@ -156,6 +156,9 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // Any thread, under `lock`: the newest text typed, so embed-ahead requests that went stale are skipped.
     private var newestTyped: String?
+    // Any thread, under `lock`: the installed apps (listed as the panel opens), and their vectors once made.
+    private var apps: [InstalledApp] = []
+    private var appVectors: (apps: [InstalledApp], source: String, values: [[Float]])?
 
     // Any thread, under `lock`
     private let lock = NSLock()
@@ -923,7 +926,19 @@ nonisolated final class Engine: @unchecked Sendable {
     func prewarm() {
         encoderQueue.async { [self] in
             encoderFailed = false   // opening the panel is a fresh chance
-            if runningEncoder() != nil { scheduleIdleExit() }
+            if runningEncoder() != nil {
+                scheduleIdleExit()
+                embedApps()   // usually listed by now (starting the encoder takes longer); else at the next open
+            }
+        }
+        searchQueue.async { [self] in
+            // Listed before the vectors load, so the first keystroke finds them. Only written here.
+            let started = Date()
+            let found = Apps.installed()
+            if lock.withLock({ apps }) != found {
+                lock.withLock { apps = found }
+                log("apps: \(found.count) installed, listed in \(ms(since: started))")
+            }
         }
         searchQueue.async { [self] in
             guard let searcher, !searcher.vectorsLoaded else { return }
@@ -980,6 +995,34 @@ nonisolated final class Engine: @unchecked Sendable {
             log("encoder: \(error)")
             stopEncoder()   // the next query starts a new one
             return nil
+        }
+    }
+
+    /// Installed apps for the panel: those named like `text`, then, with the query's vector (and the apps' made by
+    /// the same model), those that stand out by what they're for.
+    func apps(_ text: String, vector: QueryVector?) -> [(app: InstalledApp, byName: Bool)] {
+        let (apps, made) = lock.withLock { (self.apps, appVectors) }
+        let named = Apps.named(text, in: apps).map { (app: $0, byName: true) }
+        guard let vector, let made, made.apps == apps, made.source == vector.source else { return named }
+        return named + Apps.meant(vector.values, apps: apps, vectors: made.values)
+            .filter { app in !named.contains { $0.app == app } }.map { (app: $0, byName: false) }
+    }
+
+    /// Embeds the installed apps' names and categories (`InstalledApp.document`) when they or the model changed, as the
+    /// panel opens. shortcut: in memory only, so each launch embeds them again once (a few hundred ms); keep them on
+    /// disk if a first search typed that fast ever waits on it.
+    private func embedApps() {
+        let apps = lock.withLock { self.apps }
+        guard !apps.isEmpty, let worker = encoder else { return }
+        let source = worker.info.vectorSource
+        guard lock.withLock({ appVectors.map { $0.apps != apps || $0.source != source } ?? true }) else { return }
+        let started = Date()
+        do {
+            let values = try worker.embedTexts(apps.map(\.document))
+            lock.withLock { appVectors = (apps, source, values) }
+            log("apps: \(apps.count) embedded in \(ms(since: started))")
+        } catch {
+            log("apps: can't embed: \(error)")
         }
     }
 
