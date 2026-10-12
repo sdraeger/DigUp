@@ -79,7 +79,8 @@ extension AudioExtractor {
     /// Decodes audio (a file, or a video's soundtrack) to 16 kHz mono through ffmpeg and writes `window`-second WAV
     /// pieces `hop` seconds apart, skipping silent ones; one model input ignores anything past 30 s, so windows stay
     /// ≤ 30 s. Streams: memory stays at one window, even for a 3-hour podcast.
-    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, to folder: URL) async throws
+    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink)
+        async throws
         -> (pieces: [MediaPiece], duration: Double) {
         guard MediaInfo.streams(of: url).audio else { return ([], 0) }
         let duration = MediaInfo.duration(of: url) ?? 0
@@ -90,9 +91,7 @@ extension AudioExtractor {
         func emit(_ count: Int) throws {
             let slice = buffer[0..<count]
             guard rms(slice) > 0.003 else { return }   // ≈ −50 dBFS: silence isn't worth a vector
-            let out = folder.appendingPathComponent(UUID().uuidString + ".wav")
-            try writeWAV(slice, to: out)
-            pieces.append(MediaPiece(path: out.path, start: Double(offset) / sampleRate,
+            pieces.append(MediaPiece(input: try sink.keep(wav(slice), as: "wav"), start: Double(offset) / sampleRate,
                                      end: Double(offset + count) / sampleRate))
         }
         var odd: UInt8?   // a byte left over when a read ends mid-sample
@@ -125,14 +124,15 @@ extension AudioExtractor {
 extension VideoExtractor {
     /// Samples a frame every `interval` seconds through ffmpeg and keeps one per shot: a frame that looks like the
     /// previous kept one (8×8 average hash within 4 bits) only extends it.
-    static func keyframes(of url: URL, every interval: Double, maxPixel: Int, maxFrames: Int = 1200, to folder: URL)
+    static func keyframes(of url: URL, every interval: Double, maxPixel: Int, maxFrames: Int = 1200,
+                          into sink: MediaSink)
         async throws -> (frames: [MediaPiece], duration: Double, hasAudio: Bool) {
         let streams = MediaInfo.streams(of: url)
         let duration = MediaInfo.duration(of: url) ?? 0
         guard duration > 0, streams.video else { return ([], duration, streams.audio) }
         let step = max(interval, duration / Double(maxFrames))
         let first = min(0.5, duration / 2)
-        let prefix = "frame-\(UUID().uuidString)-"
+        let (folder, prefix) = (sink.folder, "frame-\(UUID().uuidString)-")   // ffmpeg writes them as files
         try FFmpeg.run(FFmpeg.ffmpeg, ["-v", "error", "-nostdin", "-ss", String(first), "-i", url.path, "-an", "-vf",
                                        "fps=\(1 / step),scale=\(maxPixel):\(maxPixel):force_original_aspect_ratio=decrease",
                                        "-q:v", "3", "-f", "image2", folder.appendingPathComponent(prefix + "%06d.jpg").path]) { _ in }
@@ -149,7 +149,7 @@ extension VideoExtractor {
                 }
                 lastHash = hash
             }
-            frames.append(MediaPiece(path: path, start: first + Double(index) * step, end: duration))
+            frames.append(MediaPiece(input: .file(path), start: first + Double(index) * step, end: duration))
         }
         // Each kept frame stands for the stretch until the next kept frame.
         for index in frames.indices.dropLast() { frames[index].end = frames[index + 1].start }

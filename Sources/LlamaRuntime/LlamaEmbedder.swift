@@ -145,14 +145,22 @@ public final class LlamaEmbedder: Embedder {
     }
 
     public func embedImages(_ paths: [String], budget: Int) throws -> [Embedding] {
-        guard media != nil else { throw WorkerError.failed("this embedder was started text-only") }
-        guard Self.budgets.contains(budget) else { throw WorkerError.failed("budget must be one of \(Self.budgets)") }
-        return paths.map { path in embedding { try embedMedia(path, image: true, budget: budget) } }
+        try embedImages(paths.map(MediaInput.file), budget: budget)
     }
 
     public func embedAudio(_ paths: [String]) throws -> [Embedding] {
+        try embedAudio(paths.map(MediaInput.file))
+    }
+
+    public func embedImages(_ inputs: [MediaInput], budget: Int) throws -> [Embedding] {
         guard media != nil else { throw WorkerError.failed("this embedder was started text-only") }
-        return paths.map { path in embedding { try embedMedia(path, image: false, budget: 0) } }
+        guard Self.budgets.contains(budget) else { throw WorkerError.failed("budget must be one of \(Self.budgets)") }
+        return inputs.map { input in embedding { try embedMedia(input, image: true, budget: budget) } }
+    }
+
+    public func embedAudio(_ inputs: [MediaInput]) throws -> [Embedding] {
+        guard media != nil else { throw WorkerError.failed("this embedder was started text-only") }
+        return inputs.map { input in embedding { try embedMedia(input, image: false, budget: 0) } }
     }
 
     /// One file's vector, or why it has none (an unreadable file must not sink its neighbours).
@@ -166,8 +174,9 @@ public final class LlamaEmbedder: Embedder {
 
     // MARK: Media
 
-    private func embedMedia(_ path: String, image: Bool, budget: Int) throws -> [Float] {
-        let bitmap = try load(path, image: image, budget: budget)
+    private func embedMedia(_ input: MediaInput, image: Bool, budget: Int) throws -> [Float] {
+        let path = Self.name(input)
+        let bitmap = try load(input, image: image, budget: budget)
         defer { mtmd_bitmap_free(bitmap) }
         let chunks = mtmd_input_chunks_init()
         defer { mtmd_input_chunks_free(chunks) }
@@ -195,20 +204,33 @@ public final class LlamaEmbedder: Embedder {
         return try run()[0]
     }
 
-    /// Reads an image or audio file with mtmd's helpers (stb_image, miniaudio at 16 kHz), resizes images for `budget`
-    /// and cuts audio at 30 s. The caller frees the bitmap.
-    private func load(_ path: String, image: Bool, budget: Int) throws -> OpaquePointer {
+    /// What an input is called in errors.
+    private static func name(_ input: MediaInput) -> String {
+        switch input {
+        case .file(let path): path
+        case .bytes(let data): "\(data.count) bytes in memory"
+        }
+    }
+
+    /// Reads an image or audio file, or its bytes, with mtmd's helpers (stb_image, miniaudio at 16 kHz; a file is read
+    /// whole and goes the same way as bytes), resizes images for `budget` and cuts audio at 30 s. The caller frees the
+    /// bitmap.
+    private func load(_ input: MediaInput, image: Bool, budget: Int) throws -> OpaquePointer {
+        let path = Self.name(input)
+        var input = input
         #if os(Windows)
         // mtmd opens a path with fopen, which on Windows reads it in the ANSI code page (a temp folder under a Bengali
         // user name wouldn't open), so the bytes go in instead: its file variant reads them into a buffer the same way.
-        let bytes = try Data(contentsOf: URL(fileURLWithPath: path))
-        let wrapper = bytes.withUnsafeBytes { buffer in
-            mtmd_helper_bitmap_init_from_buf(media, buffer.bindMemory(to: UInt8.self).baseAddress, buffer.count, false,
-                                             mtmd_helper_init_opt_default())
-        }
-        #else
-        let wrapper = mtmd_helper_bitmap_init_from_file(media, path, false, mtmd_helper_init_opt_default())
+        if case .file(let file) = input { input = .bytes(try Data(contentsOf: URL(fileURLWithPath: file))) }
         #endif
+        let wrapper = switch input {
+        case .file(let path): mtmd_helper_bitmap_init_from_file(media, path, false, mtmd_helper_init_opt_default())
+        case .bytes(let data):
+            data.withUnsafeBytes { bytes in
+                mtmd_helper_bitmap_init_from_buf(media, bytes.bindMemory(to: UInt8.self).baseAddress, data.count, false,
+                                                 mtmd_helper_init_opt_default())
+            }
+        }
         if let video = wrapper.video_ctx {
             if let bitmap = wrapper.bitmap { mtmd_bitmap_free(bitmap) }
             mtmd_helper_video_free(video)

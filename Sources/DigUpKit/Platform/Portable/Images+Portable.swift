@@ -11,7 +11,7 @@ extension ImageExtractor {
     /// Writes a downscaled copy for the model: decoded in full, turned the way the camera held it, scaled so the long
     /// side is `maxPixel`. stb reads JPEG, PNG, BMP, GIF, PSD, TGA and PNM here; HEIC, WebP, TIFF and AVIF go through
     /// ffmpeg (`decodeWithFFmpeg`). RAW isn't read yet, and says so.
-    static func prepare(_ url: URL, maxPixel: Int, minSide: Int, to folder: URL, png: Bool) throws -> Prepared {
+    static func prepare(_ url: URL, maxPixel: Int, minSide: Int, into sink: MediaSink, png: Bool) throws -> Prepared {
         let exif = EXIF.read(url)
         var image: RGBImage
         let width: Int, height: Int
@@ -37,9 +37,9 @@ extension ImageExtractor {
             image = try image.resized(width: max(1, Int((Double(image.width) * scale).rounded())),
                                       height: max(1, Int((Double(image.height) * scale).rounded())))
         }
-        let out = folder.appendingPathComponent(UUID().uuidString + (png ? ".png" : ".jpg"))
+        let out = sink.file(png ? "png" : "jpg")   // shortcut: a file here; encode in memory as macOS does if it matters
         try image.write(to: out, png: png)
-        return Prepared(path: out.path, width: width, height: height, taken: exif?.dateTimeOriginal)
+        return Prepared(input: .file(out.path), width: width, height: height, taken: exif?.dateTimeOriginal)
     }
 
     /// The whole picture, through ffmpeg as 8-bit RGB (PPM down a pipe), turned the way the file says (irot/imir in

@@ -23,7 +23,7 @@ enum ExtractError: Error, CustomStringConvertible {
 /// RAW, WebP and friends); stb_image elsewhere (Platform/).
 enum ImageExtractor {
     struct Prepared: Sendable {
-        let path: String
+        let input: MediaInput
         let width: Int
         let height: Int
         let taken: String?   // EXIF DateTimeOriginal, as written by the camera
@@ -38,7 +38,7 @@ enum PDFExtractor {
     struct Page: Sendable {
         let number: Int        // 1-based
         let text: String       // may be empty for scans
-        let imagePath: String? // set when the page had too little text and was rendered for the vision encoder
+        let image: MediaInput? // set when the page had too little text and was rendered for the vision encoder
         var ocr = false        // the text came from OCR: the text layer was garbled (`PageTextProblem.lostLetters`)
         /// Text read in glyph order (`PageTextProblem.glyphOrder`): too garbled to show or match words against, but
         /// enough of its words survive for a meaning vector beside the page's picture.

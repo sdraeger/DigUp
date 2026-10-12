@@ -512,6 +512,7 @@ public final class Indexer {
         let url = URL(fileURLWithPath: batch[0].path)
         startReading(batch[0].path)
         defer { readingLock.withLock { reading = nil } }
+        let sink = MediaSink(folder: folder)
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
             switch batch[0].kind {
@@ -523,7 +524,7 @@ public final class Indexer {
                     startReading(file.path)
                     do {
                         let image = try ImageExtractor.prepare(url, maxPixel: screenshot ? 1536 : 1024,
-                                                               minSide: options.minImageSide, to: folder,
+                                                               minSide: options.minImageSide, into: sink,
                                                                png: screenshot)
                         let ocr = screenshot ? OCR.text(ofImageAt: url) : ""
                         ready.append(ReadyImage(slot: slot, image: image, ocr: ocr))
@@ -543,7 +544,7 @@ public final class Indexer {
                     wanted = (job.step ?? (total > options.bigPDFPages ? 0..<options.pdfStep : 0..<options.maxPages))
                         .clamped(to: 0..<min(total, options.maxPages))
                     return wanted
-                }, minText: options.minPageText, renderPixels: 1400, to: folder)
+                }, minText: options.minPageText, renderPixels: 1400, into: sink)
                 prepared.payload = .pdf(pages: read.pages, read: wanted, total: read.total, title: read.title)
             case .doc:
                 // The chunks are cut the same way every time, so a later step goes on where the last one stopped.
@@ -555,17 +556,18 @@ public final class Indexer {
             case .audio:
                 let (window, hop) = (options.audioWindow, options.audioHop)
                 let (pieces, duration) = try runBlocking {
-                    try await AudioExtractor.windows(of: url, window: window, hop: hop, to: folder)
+                    try await AudioExtractor.windows(of: url, window: window, hop: hop, into: sink)
                 }
                 prepared.payload = .audio(pieces: pieces, duration: duration)
             case .video:
                 let (interval, window, hop) = (options.frameInterval, options.audioWindow, options.audioHop)
                 let (frames, duration, hasAudio) = try runBlocking {
-                    try await VideoExtractor.keyframes(of: url, every: interval, maxPixel: 1024, to: folder)
+                    try await VideoExtractor.keyframes(of: url, every: interval, maxPixel: 1024, into: sink)
                 }
                 let sound = hasAudio
-                    ? try runBlocking { try await AudioExtractor.windows(of: url, window: window, hop: hop, to: folder) }
-                        .pieces
+                    ? try runBlocking {
+                        try await AudioExtractor.windows(of: url, window: window, hop: hop, into: sink)
+                    }.pieces
                     : []
                 prepared.payload = .video(frames: frames, sound: sound, duration: duration)
             case .code:
@@ -655,7 +657,7 @@ public final class Indexer {
                         results: inout [(String, String?)]) throws {
         guard !ready.isEmpty else { return }
         let worker = try fullWorker()
-        let vectors = try worker.embedImages(ready.map(\.image.path),
+        let vectors = try worker.embedImages(ready.map(\.image.input),
                                              budget: screenshot ? options.screenshotBudget : options.photoBudget)
         try store.db.transaction {
             for (position, item) in ready.enumerated() {
@@ -692,10 +694,10 @@ public final class Indexer {
             return ("skipped", "no pages")
         }
         let title = title ?? URL(fileURLWithPath: file.path).deletingPathExtension().lastPathComponent
-        let textPages = pages.filter { $0.imagePath == nil }
+        let textPages = pages.filter { $0.image == nil }
         // A page that's mostly digits (a table, a data listing) gets keyword search only.
         let wordPages = textPages.filter { SearchText.hasWords($0.text) }
-        let imagePages = pages.filter { $0.imagePath != nil }
+        let imagePages = pages.filter { $0.image != nil }
         let garbledPages = pages.filter { $0.garbled != nil }   // rendered too: among `imagePages`
         var textVectors: [Int: [Float]] = [:]   // by page number
         var imageVectors: [Embedding] = []
@@ -706,7 +708,7 @@ public final class Indexer {
                 Prompts.document(title: title, text: String($0.text.prefix(4000)))
             })
             textVectors = Dictionary(uniqueKeysWithValues: zip(wordPages.map(\.number), vectors))
-            imageVectors = try worker.embedImages(imagePages.compactMap(\.imagePath), budget: options.pageBudget)
+            imageVectors = try worker.embedImages(imagePages.compactMap(\.image), budget: options.pageBudget)
             garbledVectors = try worker.embedTexts(garbledPages.map {
                 Prompts.document(title: title, text: String($0.garbled!.prefix(4000)))
             })
@@ -806,7 +808,7 @@ public final class Indexer {
             try store.finish(file.id, state: "skipped", detail: "silent or shorter than 2 s")
             return ("skipped", "silent or too short")
         }
-        let vectors = try fullWorker().embedAudio(pieces.map(\.path))
+        let vectors = try fullWorker().embedAudio(pieces.map(\.input))
         try store.db.transaction {
             for (piece, embedding) in zip(pieces, vectors) {
                 try store.addSegment(file: file.id, kind: .audio, modality: .audio, loc: piece.start, locEnd: piece.end,
@@ -824,8 +826,8 @@ public final class Indexer {
             return ("skipped", "no frames or sound")
         }
         let worker = try fullWorker()
-        let frameVectors = try worker.embedImages(frames.map(\.path), budget: options.frameBudget)
-        let soundVectors = try worker.embedAudio(sound.map(\.path))
+        let frameVectors = try worker.embedImages(frames.map(\.input), budget: options.frameBudget)
+        let soundVectors = try worker.embedAudio(sound.map(\.input))
         try store.db.transaction {
             for (frame, embedding) in zip(frames, frameVectors) {
                 try store.addSegment(file: file.id, kind: .frame, modality: .image, loc: frame.start,

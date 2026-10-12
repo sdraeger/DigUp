@@ -25,7 +25,7 @@ public struct WorkerInfo: Codable, Sendable {
     public var vectorSource: String { "\(model)@\(revision.prefix(7)) \(runtime) \(dtype)" }
 }
 
-/// The four calls every embedding runtime answers: the model linked into this process (llama.cpp, `LlamaRuntime`), or
+/// The calls every embedding runtime answers: the model linked into this process (llama.cpp, `LlamaRuntime`), or
 /// a worker process speaking JSON lines (`EmbeddingWorker`: the mlx-vlm reference, or `digup worker`).
 /// One thread at a time.
 public protocol Embedder: AnyObject {
@@ -33,8 +33,49 @@ public protocol Embedder: AnyObject {
     func embedTexts(_ texts: [String]) throws -> [[Float]]
     func embedImages(_ paths: [String], budget: Int) throws -> [Embedding]
     func embedAudio(_ paths: [String]) throws -> [Embedding]
+    /// The same for images and audio that may be in memory (what indexing prepares). The model in this process reads
+    /// them as they are; by default they're written to files first, for a worker in another process.
+    func embedImages(_ inputs: [MediaInput], budget: Int) throws -> [Embedding]
+    func embedAudio(_ inputs: [MediaInput]) throws -> [Embedding]
     /// Frees the model. Safe to call twice.
     func close()
+}
+
+extension Embedder {
+    public func embedImages(_ inputs: [MediaInput], budget: Int) throws -> [Embedding] {
+        try MediaInput.asFiles(inputs) { try embedImages($0, budget: budget) }
+    }
+
+    public func embedAudio(_ inputs: [MediaInput]) throws -> [Embedding] {
+        try MediaInput.asFiles(inputs) { try embedAudio($0) }
+    }
+}
+
+/// An image (PNG, JPEG) or a stretch of audio (WAV) on its way to the model: its encoded bytes, or a file holding
+/// them (`MediaSink`).
+public enum MediaInput: Sendable {
+    case bytes(Data)
+    case file(String)
+
+    /// For a worker in another process: bytes go to temporary files for the call, named by their format.
+    static func asFiles<T>(_ inputs: [MediaInput], _ body: ([String]) throws -> T) throws -> T {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("DigUp-media-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let paths = try inputs.enumerated().map { index, input -> String in
+            switch input {
+            case .file(let path):
+                return path
+            case .bytes(let data):
+                let format = data.starts(with: Array("RIFF".utf8)) ? "wav" : data.starts(with: [0xFF, 0xD8]) ? "jpg"
+                    : "png"
+                let url = folder.appendingPathComponent("\(index).\(format)")
+                try data.write(to: url)
+                return url.path
+            }
+        }
+        return try body(paths)
+    }
 }
 
 /// How to start a worker process that speaks the JSON-lines protocol (see `EmbeddingWorker`).

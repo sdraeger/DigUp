@@ -87,7 +87,7 @@ enum PDFium {
 extension PDFExtractor {
     /// Reads the pages in `range(pageCount)` (0-based). Pages with real text become text; scans, slides and pages whose
     /// text layer came out in glyph order are rendered.
-    static func pages(of url: URL, range: (Int) -> Range<Int>, minText: Int, renderPixels: Int, to folder: URL)
+    static func pages(of url: URL, range: (Int) -> Range<Int>, minText: Int, renderPixels: Int, into sink: MediaSink)
         throws -> (pages: [Page], total: Int, title: String?) {
         try PDFium.withDocument(url) { document in
             let total = Int(FPDF_GetPageCount(document))
@@ -100,16 +100,16 @@ extension PDFExtractor {
                 switch PageTextProblem.check(text) {
                 case .lostLetters, nil:
                     if text.count >= minText {
-                        pages.append(Page(number: index + 1, text: text, imagePath: nil))
+                        pages.append(Page(number: index + 1, text: text, image: nil))
                         continue
                     }
                 case .glyphOrder:
                     (text, garbled) = ("", text)
                 }
                 guard let image = PDFium.render(page, pixels: renderPixels) else { continue }
-                let out = folder.appendingPathComponent(UUID().uuidString + ".png")
+                let out = sink.file("png")
                 try image.write(to: out, png: true)
-                pages.append(Page(number: index + 1, text: text, imagePath: out.path, garbled: garbled))
+                pages.append(Page(number: index + 1, text: text, image: .file(out.path), garbled: garbled))
             }
             return (pages, total, PDFium.meta(document, "Title"))
         }

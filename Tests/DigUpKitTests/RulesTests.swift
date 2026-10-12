@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import DigUpKit
@@ -8,6 +9,40 @@ import Testing
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
+
+    @Test func mediaStaysInMemoryUpToItsBudget() throws {
+        let sink = MediaSink(folder: folder, budget: 10)
+        guard case .bytes(let kept) = try sink.keep(Data(repeating: 1, count: 6), as: "wav") else {
+            Issue.record("6 of 10 bytes should stay in memory")
+            return
+        }
+        #expect(kept.count == 6)
+        guard case .file(let path) = try sink.keep(Data(repeating: 2, count: 6), as: "wav") else {
+            Issue.record("12 of 10 bytes should go to a file")
+            return
+        }
+        #expect(try Data(contentsOf: URL(fileURLWithPath: path)) == Data(repeating: 2, count: 6))
+    }
+
+    /// Preparing an image for the model writes nothing: the PNG stays in memory (`MediaSink`).
+    @Test func preparingAnImageWritesNoFile() throws {
+        let image = folder.appendingPathComponent("shot.png")
+        let context = CGContext(data: nil, width: 400, height: 300, bitsPerComponent: 8, bytesPerRow: 0,
+                                space: CGColorSpaceCreateDeviceRGB(),
+                                bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue)!
+        context.setFillColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: 400, height: 300))
+        try ImageExtractor.encode(context.makeImage()!, png: true).write(to: image)
+        let file = FileRecord(id: 1, path: image.path, kind: .image, size: 1, mtime: 0, inode: 1, device: 1,
+                              state: "pending")
+        let scratch = folder.appendingPathComponent("scratch")
+        let prepared = Indexer.prepare(Indexer.Job(files: [file]), options: IndexOptions(), into: scratch)
+        guard case .images(_, let ready) = prepared.payload, case .bytes = ready.first?.image.input else {
+            Issue.record("the image should be ready, in memory")
+            return
+        }
+        #expect(try FileManager.default.contentsOfDirectory(atPath: scratch.path).isEmpty)
+    }
 
     @Test func bigTextIsReadOnlyAsFarAsItCanBeIndexed() throws {
         let file = folder.appendingPathComponent("dump.txt")

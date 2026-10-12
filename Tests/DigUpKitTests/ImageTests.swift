@@ -18,13 +18,21 @@ import ImageIO
         return url
     }()
 
+    /// Prepared pictures go to files here, for `decode` to read back.
+    var sink: MediaSink { MediaSink(folder: folder, budget: 0) }
+
+    static func path(_ prepared: ImageExtractor.Prepared) -> String {
+        if case .file(let path) = prepared.input { return path }
+        return ""
+    }
+
     @Test(arguments: ["pattern-o6.jpg", "pattern-o6.heic", "pattern-o6.webp", "pattern-o6.tiff", "pattern.avif"])
     func preparedAsShown(_ name: String) throws {
         let prepared = try ImageExtractor.prepare(Self.pictures.appendingPathComponent(name), maxPixel: 1024,
-                                                  minSide: 256, to: folder, png: true)
+                                                  minSide: 256, into: sink, png: true)
         #expect(Set([prepared.width, prepared.height]) == [400, 240])
         #expect(prepared.taken == "2024:05:17 10:30:00")
-        let shown = try Self.decode(prepared.path)
+        let shown = try Self.decode(Self.path(prepared))
         if name.contains("-o6") {   // turned 90° clockwise: blue and red on top, yellow and green below
             #expect(shown.width == 240 && shown.height == 400)
             #expect(shown.quadrants == ["B", "R", "Y", "G"])
@@ -38,7 +46,7 @@ import ImageIO
     func smallPicturesAreSkipped(_ name: String) {
         #expect(throws: ExtractError.self) {
             try ImageExtractor.prepare(Self.pictures.appendingPathComponent(name), maxPixel: 1024, minSide: 401,
-                                       to: folder, png: true)
+                                       into: sink, png: true)
         }
     }
 
@@ -48,9 +56,9 @@ import ImageIO
         let chart = folder.appendingPathComponent("chart.svg")
         try ##"<svg xmlns="http://www.w3.org/2000/svg" width="800" height="400"><rect width="400" height="400" fill="#f00"/><rect x="400" width="400" height="400" fill="#00f"/></svg>"##
             .write(to: chart, atomically: true, encoding: .utf8)
-        let prepared = try ImageExtractor.prepare(chart, maxPixel: 1024, minSide: 256, to: folder, png: true)
+        let prepared = try ImageExtractor.prepare(chart, maxPixel: 1024, minSide: 256, into: sink, png: true)
         #expect(prepared.width == 800 && prepared.height == 400)
-        let shown = try Self.decode(prepared.path)
+        let shown = try Self.decode(Self.path(prepared))
         #expect(shown.width == 1024 && shown.height == 512)
         #expect(shown.quadrants == ["R", "B", "R", "B"])
         // An icon is still too small to say much.
@@ -58,7 +66,7 @@ import ImageIO
         try ##"<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><rect width="24" height="24" fill="#0f0"/></svg>"##
             .write(to: icon, atomically: true, encoding: .utf8)
         do {
-            _ = try ImageExtractor.prepare(icon, maxPixel: 1024, minSide: 256, to: folder, png: true)
+            _ = try ImageExtractor.prepare(icon, maxPixel: 1024, minSide: 256, into: sink, png: true)
             Issue.record("a 24-point icon was read")
         } catch {
             #expect("\(error)" == "small image 24×24")

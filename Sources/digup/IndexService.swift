@@ -373,6 +373,11 @@ final class SharedEmbedder: @unchecked Sendable {
             try model.embedImages(paths, budget: budget)
         }
         func embedAudio(_ paths: [String]) throws -> [Embedding] { try model.embedAudio(paths) }
+        // Passed on as they are: the defaults would write them to files for the model in this very process.
+        func embedImages(_ inputs: [MediaInput], budget: Int) throws -> [Embedding] {
+            try model.embedImages(inputs, budget: budget)
+        }
+        func embedAudio(_ inputs: [MediaInput]) throws -> [Embedding] { try model.embedAudio(inputs) }
         func close() {}
     }
 }

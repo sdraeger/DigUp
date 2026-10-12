@@ -9,7 +9,8 @@ extension AudioExtractor {
     /// Decodes audio (a file, or a video's soundtrack) to 16 kHz mono and writes `window`-second WAV pieces `hop`
     /// seconds apart, skipping silent ones. One model input ignores anything past 30 s, so windows stay ≤ 30 s.
     /// Streams: memory stays at one window, even for a 3-hour podcast.
-    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, to folder: URL) async throws
+    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink)
+        async throws
         -> (pieces: [MediaPiece], duration: Double) {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { return ([], 0) }
@@ -30,9 +31,7 @@ extension AudioExtractor {
         func emit(_ count: Int) throws {
             let slice = buffer[0..<count]
             guard rms(slice) > 0.003 else { return }   // ≈ −50 dBFS: silence isn't worth a vector
-            let out = folder.appendingPathComponent(UUID().uuidString + ".wav")
-            try writeWAV(slice, to: out)
-            pieces.append(MediaPiece(path: out.path, start: Double(offset) / sampleRate,
+            pieces.append(MediaPiece(input: try sink.keep(wav(slice), as: "wav"), start: Double(offset) / sampleRate,
                                      end: Double(offset + count) / sampleRate))
         }
         while let sampleBuffer = output.copyNextSampleBuffer() {
@@ -60,7 +59,8 @@ extension VideoExtractor {
     /// Samples a frame every `interval` seconds and keeps one per shot: a frame that looks like the previous kept one
     /// (8×8 average hash within 4 bits) only extends it. Screen recordings and lectures shrink a lot.
     /// Google's Video Moments Finder also matches queries against per-frame vectors.
-    static func keyframes(of url: URL, every interval: Double, maxPixel: Int, maxFrames: Int = 1200, to folder: URL)
+    static func keyframes(of url: URL, every interval: Double, maxPixel: Int, maxFrames: Int = 1200,
+                          into sink: MediaSink)
         async throws -> (frames: [MediaPiece], duration: Double, hasAudio: Bool) {
         let asset = AVURLAsset(url: url)
         let duration = try await asset.load(.duration).seconds
@@ -86,9 +86,8 @@ extension VideoExtractor {
             let hash = averageHash(image)
             if let lastHash, (hash ^ lastHash).nonzeroBitCount <= 4 { continue }
             lastHash = hash
-            let out = folder.appendingPathComponent(UUID().uuidString + ".jpg")
-            try ImageExtractor.write(image, to: out, png: false)
-            frames.append(MediaPiece(path: out.path, start: max(0, actualTime.seconds), end: duration))
+            frames.append(MediaPiece(input: try sink.keep(ImageExtractor.encode(image, png: false), as: "jpg"),
+                                     start: max(0, actualTime.seconds), end: duration))
         }
         // Each kept frame stands for the stretch until the next kept frame.
         for index in frames.indices.dropLast() { frames[index].end = frames[index + 1].start }

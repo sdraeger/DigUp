@@ -9,15 +9,15 @@ import UniformTypeIdentifiers
 import Vision
 
 extension ImageExtractor {
-    /// Writes a downscaled copy for the model. ImageIO decodes straight to the thumbnail size, so a 48 MP photo never
+    /// A downscaled copy for the model. ImageIO decodes straight to the thumbnail size, so a 48 MP photo never
     /// gets decoded at full resolution. HEIC, RAW, WebP and friends all work.
     /// Pictures ImageIO can't open (SVG) are drawn with AppKit (`drawn`).
     static let drawsVectorPictures = true
 
-    static func prepare(_ url: URL, maxPixel: Int, minSide: Int, to folder: URL, png: Bool) throws -> Prepared {
+    static func prepare(_ url: URL, maxPixel: Int, minSide: Int, into sink: MediaSink, png: Bool) throws -> Prepared {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary),
               CGImageSourceGetType(source) != nil
-        else { return try drawn(url, maxPixel: maxPixel, minSide: minSide, to: folder, png: png) }
+        else { return try drawn(url, maxPixel: maxPixel, minSide: minSide, into: sink, png: png) }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         let width = properties[kCGImagePropertyPixelWidth] as? Int ?? 0
         let height = properties[kCGImagePropertyPixelHeight] as? Int ?? 0
@@ -30,17 +30,16 @@ extension ImageExtractor {
         ]
         guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
         else { throw ExtractError.unreadable("can't decode image") }
-        let out = folder.appendingPathComponent(UUID().uuidString + (png ? ".png" : ".jpg"))
-        try write(thumbnail, to: out, png: png)
+        let input = try sink.keep(encode(thumbnail, png: png), as: png ? "png" : "jpg")
         let exif = properties[kCGImagePropertyExifDictionary] as? [CFString: Any]
-        return Prepared(path: out.path, width: width, height: height,
+        return Prepared(input: input, width: width, height: height,
                         taken: exif?[kCGImagePropertyExifDateTimeOriginal] as? String)
     }
 
     /// A picture ImageIO can't read, like an SVG: AppKit draws it, straight at the size the model needs (a vector
     /// picture has no pixels of its own: its size in points stands for them). Transparent parts come out white, as
     /// they look on a page.
-    private static func drawn(_ url: URL, maxPixel: Int, minSide: Int, to folder: URL, png: Bool) throws -> Prepared {
+    private static func drawn(_ url: URL, maxPixel: Int, minSide: Int, into sink: MediaSink, png: Bool) throws -> Prepared {
         guard let image = NSImage(contentsOf: url), image.size.width > 0, image.size.height > 0
         else { throw ExtractError.unreadable("can't read this picture") }
         let (width, height) = (Int(image.size.width.rounded()), Int(image.size.height.rounded()))
@@ -58,9 +57,8 @@ extension ImageExtractor {
         image.draw(in: NSRect(x: 0, y: 0, width: side.0, height: side.1))
         NSGraphicsContext.restoreGraphicsState()
         guard let bitmap = context.makeImage() else { throw ExtractError.unreadable("can't draw this picture") }
-        let out = folder.appendingPathComponent(UUID().uuidString + (png ? ".png" : ".jpg"))
-        try write(bitmap, to: out, png: png)
-        return Prepared(path: out.path, width: width, height: height, taken: nil)
+        return Prepared(input: try sink.keep(encode(bitmap, png: png), as: png ? "png" : "jpg"), width: width,
+                        height: height, taken: nil)
     }
 
     static func fullImage(_ url: URL) -> CGImage? {
@@ -69,12 +67,19 @@ extension ImageExtractor {
     }
 
     static func write(_ image: CGImage, to url: URL, png: Bool) throws {
+        try encode(image, png: png).write(to: url)
+    }
+
+    /// The bytes a PNG or JPEG file of `image` would hold (the same, checked 2026-10-11).
+    static func encode(_ image: CGImage, png: Bool) throws -> Data {
         let type = (png ? UTType.png : UTType.jpeg).identifier as CFString
-        guard let destination = CGImageDestinationCreateWithURL(url as CFURL, type, 1, nil)
-        else { throw ExtractError.unreadable("can't write \(url.lastPathComponent)") }
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data as CFMutableData, type, 1, nil)
+        else { throw ExtractError.unreadable("can't encode image") }
         let properties = png ? nil : [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary
         CGImageDestinationAddImage(destination, image, properties)
         guard CGImageDestinationFinalize(destination) else { throw ExtractError.unreadable("can't encode image") }
+        return data as Data
     }
 }
 
@@ -114,7 +119,7 @@ extension PDFExtractor {
     /// the rendered page where the words came out in glyph order (Bengali, which OCR can't read). On the multilingual
     /// eval (2026-10-08), a glyph-order page as picture + garbled-text vector beat the picture alone: R@1 0.75 vs 0.73,
     /// MRR 0.84 vs 0.81 (an English query for a Bengali page found it only through the text vector).
-    static func pages(of url: URL, range: (Int) -> Range<Int>, minText: Int, renderPixels: Int, to folder: URL)
+    static func pages(of url: URL, range: (Int) -> Range<Int>, minText: Int, renderPixels: Int, into sink: MediaSink)
         throws -> (pages: [Page], total: Int, title: String?) {
         guard let document = PDFDocument(url: url) else { throw ExtractError.unreadable("can't open PDF") }
         if document.isLocked { throw ExtractError.locked }
@@ -130,25 +135,24 @@ extension PDFExtractor {
                     let read = OCR.text(in: image).trimmingCharacters(in: .whitespacesAndNewlines)
                     if read.count >= minText, PageTextProblem.check(read) == nil,
                        read.unicodeScalars.contains(where: { Script.arabic.contains($0.value) }) {
-                        pages.append(Page(number: index + 1, text: read, imagePath: nil, ocr: true))
+                        pages.append(Page(number: index + 1, text: read, image: nil, ocr: true))
                         continue
                     }
                 }
                 if text.count >= minText {
-                    pages.append(Page(number: index + 1, text: text, imagePath: nil))
+                    pages.append(Page(number: index + 1, text: text, image: nil))
                     continue
                 }
             case .glyphOrder:
                 (text, garbled) = ("", text)
             case nil:
                 if text.count >= minText {
-                    pages.append(Page(number: index + 1, text: text, imagePath: nil))
+                    pages.append(Page(number: index + 1, text: text, image: nil))
                     continue
                 }
             }
             guard let image = render(page, pixels: renderPixels) else { continue }
-            let out = folder.appendingPathComponent(UUID().uuidString + ".png")
-            try ImageExtractor.write(image, to: out, png: true)
+            let input = try sink.keep(ImageExtractor.encode(image, png: true), as: "png")
             // A scan, or a page that's mostly a picture: its words come from OCR, for keyword search only (an invoice
             // number on a scan, as on a screenshot), and its meaning stays the picture's vector. Not for a text layer
             // that came out in glyph order (Bengali), which OCR can't read either.
@@ -157,7 +161,7 @@ extension PDFExtractor {
                 let read = OCR.text(in: image).trimmingCharacters(in: .whitespacesAndNewlines)
                 if read.count > text.count { (text, ocr) = (read, true) }
             }
-            pages.append(Page(number: index + 1, text: text, imagePath: out.path, ocr: ocr, garbled: garbled))
+            pages.append(Page(number: index + 1, text: text, image: input, ocr: ocr, garbled: garbled))
         }
         let title = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
         return (pages, document.pageCount, title)

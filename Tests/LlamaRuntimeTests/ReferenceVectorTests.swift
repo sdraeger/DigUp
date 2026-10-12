@@ -74,6 +74,25 @@ import Testing
         }
     }
 
+    /// Indexing hands the model the bytes of its PNGs, JPEGs and WAVs in memory (`MediaSink`): the same vectors as
+    /// the files, to the last bit.
+    @Test(.enabled(if: modelsThere)) func bytesInMemoryMakeTheSameVectorsAsTheirFiles() throws {
+        let log = FileManager.default.temporaryDirectory.appendingPathComponent("digup-reference-vectors.log")
+        let embedder = try LlamaEmbedder(models: LlamaModels.locate(), textOnly: false, log: log)
+        defer { embedder.close() }
+        for (_, file, budget) in Self.images {
+            let url = Self.folder.appendingPathComponent(file)
+            let fromFile = try embedder.embedImages([MediaInput.file(url.path)], budget: budget)[0].vector
+            let bytes = MediaInput.bytes(try Data(contentsOf: url))
+            let fromBytes = try embedder.embedImages([bytes], budget: budget)[0].vector
+            #expect(fromFile != nil && fromBytes == fromFile, "\(file) at \(budget)")
+        }
+        let speech = Self.folder.appendingPathComponent("speech.wav")
+        let fromFile = try embedder.embedAudio([MediaInput.file(speech.path)])[0].vector
+        let fromBytes = try embedder.embedAudio([MediaInput.bytes(Data(contentsOf: speech))])[0].vector
+        #expect(fromFile != nil && fromBytes == fromFile)
+    }
+
     static func vectors() throws -> [String: [Float]] {
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("digup-reference-vectors.log")
         let embedder = try LlamaEmbedder(models: LlamaModels.locate(), textOnly: false, log: log)

@@ -19,7 +19,10 @@ public enum PreviewImages {
             let seconds = loc ?? 0
             try runBlocking { try await VideoExtractor.frame(at: seconds, of: url, pixels: pixels, to: out) }
         case .image:
-            return try ImageExtractor.prepare(url, maxPixel: pixels, minSide: 0, to: folder, png: false).path
+            // A sink with no room in memory: the picture goes to a file.
+            let sink = MediaSink(folder: folder, budget: 0)
+            if case .file(let path) = try ImageExtractor.prepare(url, maxPixel: pixels, minSide: 0, into: sink,
+                                                                 png: false).input { return path }
         }
         return out.path
     }
