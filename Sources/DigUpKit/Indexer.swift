@@ -88,8 +88,10 @@ public final class Indexer {
     /// Crawls `roots` and reconciles the index: new files are queued, changed ones re-queued, moved ones re-pathed
     /// (no re-embedding), and files that are gone or newly excluded are removed.
     public func sync(_ roots: [URL]) throws -> SyncSummary {
+        // Paths as the crawl reports them (`Crawler.crawl`), resolved before it: an ejected drive can't be.
+        let real = roots.map { FolderSelection.realPath($0.standardizedFileURL.path) }
         let crawl = Crawler.crawl(roots, options: options)
-        let existing = try store.files(under: roots.map { $0.standardizedFileURL.path })
+        let existing = try store.files(under: real)
         var byPath: [String: FileRecord] = [:]
         var byInode: [String: FileRecord] = [:]
         for file in existing {
@@ -122,8 +124,8 @@ public final class Indexer {
             // A root that went away while it was being walked (a drive ejected mid-crawl), a folder it couldn't read
             // (access not granted yet) and files only in the cloud looked like less than there is: keep their rows
             // rather than take that for "deleted".
-            let vanished = roots.map { $0.standardizedFileURL.path }
-                .filter { !FileManager.default.fileExists(atPath: $0) }.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
+            let vanished = real.filter { !FileManager.default.fileExists(atPath: $0) }
+                .map { $0.hasSuffix("/") ? $0 : $0 + "/" }
                 + crawl.unreadable.map { $0.hasSuffix("/") ? $0 : $0 + "/" }
             let inCloud = Set(crawl.inCloud)
             for row in existing where !seen.contains(row.path) && !movedFrom.contains(row.path)

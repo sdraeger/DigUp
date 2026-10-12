@@ -105,6 +105,21 @@ import Testing
         #expect(try state(store, pdf.path).state == "done")
     }
 
+    /// A folder given by a path the walk reports otherwise (/var is /private/var, letters typed in another case) syncs
+    /// again without taking its files for new ones.
+    @Test func aFolderGivenAnotherWayStillSyncs() throws {
+        let given = FileManager.default.temporaryDirectory.appendingPathComponent("DigUpTests-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: given) }
+        let notes = given.appendingPathComponent("Notes")
+        try FileManager.default.createDirectory(at: notes, withIntermediateDirectories: true)
+        try "Otters.".write(to: notes.appendingPathComponent("a.txt"), atomically: true, encoding: .utf8)
+        let indexer = try indexer(try store(), FakeEmbedder())
+        #expect(notes.path.hasPrefix("/var/"))   // the walk says /private/var
+        #expect(try indexer.sync([notes]).added == 1)
+        let again = try indexer.sync([given.appendingPathComponent("NOTES")])
+        #expect(again.added == 0 && again.removed == 0 && again.unchanged == 1)
+    }
+
     /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
     /// deleted would embed every file again once access is back.
     @Test func anUnreadableFolderKeepsItsFiles() throws {

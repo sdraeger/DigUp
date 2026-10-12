@@ -38,20 +38,20 @@ public enum Crawler {
         var found: [Candidate] = []
         var foundPaths = Set<String>()   // a folder inside another root would be walked twice
         let unreadable = NSMutableArray()   // the walk's error handler escapes
-        let rootPaths = Set(roots.map { $0.standardizedFileURL.path })
+        // Each root as the walk reports its files: symlinks resolved, letters as on disk (/private/tmp for /tmp).
+        let roots = roots.map { URL(fileURLWithPath: FolderSelection.realPath($0.standardizedFileURL.path)) }
+        let rootPaths = Set(roots.map(\.path))
 
-        for root in roots.map({ $0.standardizedFileURL }) {
+        for root in roots {
             if options.code {
                 repos.enterRoot(root.path)
             } else if Rules.isProjectRoot(root.path) {
                 projectRoots.insert(root.path)
             }
             // A skip applies inside the chosen folders that contain it: a folder chosen inside a skipped one is
-            // walked whole (`FolderSelection`). The walk reports real paths (/private/var, where the root says /var).
-            let real = FolderSelection.realPath(root.path)
-            let skips = options.excludedFolders.filter {
-                FolderSelection.isInside($0, root.path) || FolderSelection.isInside($0, real)
-            }.flatMap { [$0, FolderSelection.realPath($0)] }
+            // walked whole (`FolderSelection`). The walk reports real paths (/private/var, where a skip says /var).
+            let skips = options.excludedFolders.map(FolderSelection.realPath)
+                .filter { FolderSelection.isInside($0, root.path) }
             #if os(Windows)
             guard let walker = FileSystem.walk(root, keys: keys) else { continue }
             #else

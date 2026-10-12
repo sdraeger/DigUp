@@ -89,7 +89,7 @@ final class IndexService: @unchecked Sendable {
             for part in parts {
                 try part.indexer.checkModel()   // a new model: everything is queued again
                 if let keepOnly = part.keepOnly {
-                    let pruned = try part.store.prune(keepingUnder: keepOnly.map(\.path))
+                    let pruned = try part.store.prune(keepingUnder: keepOnly.map { FolderSelection.realPath($0.path) })
                     if pruned > 0 { emit(["event": "pruned", "files": pruned, "code": part.code]) }
                 }
             }
@@ -204,7 +204,7 @@ final class IndexService: @unchecked Sendable {
         }
         unavailable[part.code] = report
         let available = part.roots.filter { !missing.contains($0) && !unreadable.contains($0) }
-        part.store.scope = available.map(\.path)
+        part.store.scope = available.map { FolderSelection.realPath($0.path) }   // as the crawl stores paths
         return available
     }
 
