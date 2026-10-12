@@ -150,6 +150,22 @@ import Testing
         #expect(later.changed == 1 && later.deferred == 0)
     }
 
+    /// A run that stops early (a new sync goes first) keeps the job it read ahead for the next run.
+    @Test func theJobReadAheadIsNotReadAgain() throws {
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        for name in ["a", "b", "c", "d"] {
+            try "Notes \(name) about otters.".write(to: files.appendingPathComponent("\(name).txt"), atomically: true,
+                                                   encoding: .utf8)
+        }
+        let indexer = try indexer(try store(), FakeEmbedder())
+        _ = try indexer.sync([files])
+        var events = 0
+        _ = try indexer.run(shouldStop: { events >= 1 }) { _ in events += 1 }
+        #expect(indexer.jobsPrepared == 2)   // the first, and the one read ahead
+        #expect(try indexer.run() == ["done": 3])
+        #expect(indexer.jobsPrepared == 4)   // each file once
+    }
+
     /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
     /// deleted would embed every file again once access is back.
     @Test func anUnreadableFolderKeepsItsFiles() throws {

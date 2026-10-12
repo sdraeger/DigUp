@@ -80,6 +80,7 @@ public final class Indexer {
     /// Stops the worker and removes the scratch folder, for a process that's about to exit (deinit won't run then).
     public func finish() {
         closeWorker()
+        readAhead = nil   // its folder goes with the scratch folder (one still being written: at the next start)
         try? FileManager.default.removeItem(at: scratch)
     }
 
@@ -255,7 +256,7 @@ public final class Indexer {
             return index < careful ? files.map { (index, Job(files: [$0], step: job.step)) }
                 : [(index, Job(files: files, step: job.step))]
         }
-        var ahead: PendingBatch?
+        var ahead: (job: Job, batch: PendingBatch)?
         var groupStarted: Date?
         func save() throws {
             guard groupStarted != nil else { return }
@@ -263,8 +264,11 @@ public final class Indexer {
             groupStarted = nil
         }
         defer {
-            // A job prepared for a run that stopped early: throw its files away.
-            if let ahead { try? FileManager.default.removeItem(at: ahead.wait().folder) }
+            // Prepared for a run that stopped early: the next run likely starts with it.
+            if let ahead {
+                discardReadAhead()
+                readAhead = ahead
+            }
             if let costsFolder, !measured.tallies.isEmpty {
                 MeasuredCosts.merge(measured, into: costsFolder)
                 measured = MeasuredCosts()
@@ -276,9 +280,10 @@ public final class Indexer {
             let carefully = index < careful
             if carefully { markInflight(job) }
             let started = Date()
-            let prepared = (ahead ?? prepare(job)).wait()
+            let prepared = (ahead?.batch ?? keptAhead(for: job) ?? prepare(job)).wait()
             // Read ahead while this one embeds, except while going carefully (a crash there would be blamed on this).
-            ahead = !carefully && position + 1 < jobs.count ? prepare(jobs[position + 1].job) : nil
+            ahead = !carefully && position + 1 < jobs.count
+                ? (jobs[position + 1].job, prepare(jobs[position + 1].job)) : nil
             defer { try? FileManager.default.removeItem(at: prepared.folder) }
             guard !skip(job) else { continue }
             if groupStarted == nil {
@@ -496,7 +501,27 @@ public final class Indexer {
     }
 
     private let preparing = DispatchQueue(label: "DigUp.prepare", qos: .utility)
-    private var jobsPrepared = 0   // names the scratch folders
+    private(set) var jobsPrepared = 0   // names the scratch folders
+    /// The job read ahead for a run that stopped early (a new sync came first, or a pause): kept rather than thrown
+    /// away, so a 2-hour video isn't decoded twice. The next run uses it if it starts with the same, unchanged files.
+    private var readAhead: (job: Job, batch: PendingBatch)?
+
+    private func keptAhead(for job: Job) -> PendingBatch? {
+        guard let kept = readAhead else { return nil }
+        let unchanged = { (files: [FileRecord]) in files.map { "\($0.id) \($0.size) \($0.mtime)" } }
+        guard kept.job.step == job.step, unchanged(kept.job.files) == unchanged(job.files) else {
+            discardReadAhead()
+            return nil
+        }
+        readAhead = nil
+        return kept.batch
+    }
+
+    private func discardReadAhead() {
+        guard let kept = readAhead else { return }
+        readAhead = nil
+        preparing.async { try? FileManager.default.removeItem(at: kept.batch.wait().folder) }   // after its prepare
+    }
 
     /// The file being read (extracted) right now, and since when: for a watchdog. Apple's frameworks have run away on
     /// some files (PDF text extraction growing by gigabytes a minute, never returning), and nothing stops them from
