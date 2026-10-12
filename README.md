@@ -33,6 +33,8 @@ whatever kind of file it is. All of it happens on your Mac.
 - a file is a search too: drop a photo, a recording or a document into the panel, press ⌘L on a result, or type
   "like: " and its path (⇥ completes it), and get the pictures, pages, moments and notes most like it
 - a saved search keeps watching: save "receipts" with ⌘S, and DigUp tells you when a new file matches it
+- a search can say when and what: "PDFs from March about the lease", "photos from last summer", "screenshots from
+  yesterday" (when a file changed, or when a photo was taken)
 
 Exact words count too. Invoice numbers, error codes and names are matched as written, in file names, document text
 and the text inside screenshots, so a search gets both the meaning and the exact string.

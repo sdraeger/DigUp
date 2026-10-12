@@ -37,6 +37,8 @@ public final class Searcher {
     /// False for the vectors the later pass adds (`Indexer.finishLongFiles`): scored, but they don't set the scale.
     private var rowSetsScale: [Bool] = []
     private var fileKind: [Int64: FileKind] = [:]
+    /// Each file's date for `QueryFilter`'s dates (`dates()`), read when a search first needs them.
+    private var fileDates: [Int64: Double]?
     public private(set) var vectorSource: String?
     /// False after `releaseVectors()` (or `loadVectors: false`): keyword search still works, and the next search with
     /// a query vector loads them again.
@@ -102,6 +104,7 @@ public final class Searcher {
 
     private func reloadFiles() throws {
         fileKind.removeAll(keepingCapacity: true)
+        fileDates = nil
         try store.db.query("SELECT id, kind FROM files") { row in
             fileKind[row.int(0)] = FileKind(rawValue: row.text(1) ?? "")
         }
@@ -115,12 +118,13 @@ public final class Searcher {
     public static let wordWeight = 2.0
     public static let codeWordWeight = 1.0
 
-    public func search(_ text: String, queryVector: [Float]?, kinds: Set<FileKind>? = nil, limit: Int = 20,
-                       zGate: Double = 2.0, wordWeight: Double? = nil, prefixLast: Bool = false) throws -> [SearchHit] {
+    /// `dates`: only files changed in it (a photo: taken), as a query's own words can ask (`QueryFilter`).
+    public func search(_ text: String, queryVector: [Float]?, kinds: Set<FileKind>? = nil, dates: DateInterval? = nil,
+                       limit: Int = 20, zGate: Double = 2.0, wordWeight: Double? = nil,
+                       prefixLast: Bool = false) throws -> [SearchHit] {
         let wordWeight = wordWeight ?? (isCode ? Self.codeWordWeight : Self.wordWeight)
         if queryVector != nil, !vectorsLoaded { try reload() }
-        let fileKind = self.fileKind
-        let allowed = { (file: Int64) -> Bool in kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false }
+        let allowed = try filter(kinds: kinds, dates: dates)
 
         // Meaning: score every vector on this query's scale (`meaning`), keep each file's best segment.
         var best: [Int64: (z: Double, cosine: Double, row: Int)] = [:]
@@ -210,16 +214,7 @@ public final class Searcher {
                                                    identifier: rank < 10 ? identifier : nil, query: text, terms: terms,
                                                    wordsHere: keyword?.1.segment == segmentID || identifier != nil)
             }
-            var path = "", kind = FileKind.doc, modified = 0.0, size: Int64 = 0, info: [String: String] = [:]
-            try store.db.query("SELECT path, kind, mtime, size, info FROM files WHERE id = ?", [.int(file)]) {
-                path = $0.text(0) ?? ""
-                kind = FileKind(rawValue: $0.text(1) ?? "") ?? .doc
-                modified = $0.double(2)
-                size = $0.int(3)
-                if let json = $0.text(4)?.data(using: .utf8) {
-                    info = (try? JSONSerialization.jsonObject(with: json) as? [String: String]) ?? [:]
-                }
-            }
+            let (path, kind, modified, size, info) = try fileRow(file)
             var segment = SegmentKind.name, loc: Double?, locEnd: Double?, storedExcerpt: String?
             try store.db.query("SELECT kind, loc, loc_end, excerpt FROM segments WHERE id = ?", [.int(segmentID)]) {
                 segment = SegmentKind(rawValue: $0.text(0) ?? "") ?? .name
@@ -247,6 +242,78 @@ public final class Searcher {
                                   focus: focus))
         }
         return hits
+    }
+
+    private func fileRow(_ file: Int64) throws
+        -> (path: String, kind: FileKind, modified: Double, size: Int64, info: [String: String]) {
+        var path = "", kind = FileKind.doc, modified = 0.0, size: Int64 = 0, info: [String: String] = [:]
+        try store.db.query("SELECT path, kind, mtime, size, info FROM files WHERE id = ?", [.int(file)]) {
+            path = $0.text(0) ?? ""
+            kind = FileKind(rawValue: $0.text(1) ?? "") ?? .doc
+            modified = $0.double(2)
+            size = $0.int(3)
+            if let json = $0.text(4)?.data(using: .utf8) {
+                info = (try? JSONSerialization.jsonObject(with: json) as? [String: String]) ?? [:]
+            }
+        }
+        return (path, kind, modified, size, info)
+    }
+
+    /// Which files `kinds` and `dates` let through.
+    private func filter(kinds: Set<FileKind>?, dates: DateInterval?) throws -> (Int64) -> Bool {
+        let fileKind = self.fileKind
+        let fileDates = dates == nil ? [:] : try self.dates()
+        return { file in
+            (kinds == nil || fileKind[file].map { kinds!.contains($0) } ?? false)
+                && (dates == nil || fileDates[file].map { dates!.contains(Date(timeIntervalSince1970: $0)) } ?? false)
+        }
+    }
+
+    /// Each file's date: when a photo was taken, else when the file last changed. Files indexing skipped (icons,
+    /// pictures too small) have none, so a date never lets them through.
+    private func dates() throws -> [Int64: Double] {
+        if let fileDates { return fileDates }
+        var dates: [Int64: Double] = [:]
+        try store.db.query("""
+            SELECT id, mtime, json_extract(info, '$.taken') FROM files WHERE state != 'skipped'
+            """) { dates[$0.int(0)] = $0.text(2).flatMap(Self.taken) ?? $0.double(1) }
+        fileDates = dates
+        return dates
+    }
+
+    /// EXIF's "2025:07:14 10:03:22", in the Mac's time zone (the camera's clock has none).
+    public static func taken(_ text: String) -> Double? {
+        let parts = text.split { $0 == ":" || $0 == " " }.compactMap { Int($0) }
+        guard parts.count >= 3, parts[0] > 1900 else { return nil }
+        let at = { (index: Int) in index < parts.count ? parts[index] : 0 }
+        return Calendar.current.date(from: DateComponents(year: parts[0], month: parts[1], day: parts[2], hour: at(3),
+                                                          minute: at(4), second: at(5)))?.timeIntervalSince1970
+    }
+
+    /// The files `kinds` and `dates` let through, newest first: a query that's all filter ("photos from last summer").
+    /// Each points at its first vector's segment (the picture, the first page), else at its name.
+    public func listing(kinds: Set<FileKind>?, dates: DateInterval?, limit: Int = 20) throws -> [SearchHit] {
+        let allowed = try filter(kinds: kinds, dates: dates)
+        let fileDates = try self.dates()
+        let files = fileKind.keys.filter { fileDates[$0] != nil && allowed($0) }
+            .sorted { fileDates[$0]! > fileDates[$1]! || (fileDates[$0]! == fileDates[$1]! && $0 < $1) }
+        return try files.prefix(limit).map { try hit(file: $0) }
+    }
+
+    /// A file as a listing's result: its first vector's segment, else its name.
+    private func hit(file: Int64) throws -> SearchHit {
+        let (path, kind, modified, size, info) = try fileRow(file)
+        var segment = (id: Int64(0), kind: SegmentKind.name, loc: Double?.none, locEnd: Double?.none,
+                       excerpt: String?.none)
+        try store.db.query("""
+            SELECT id, kind, loc, loc_end, excerpt FROM segments WHERE file = ? ORDER BY vec IS NULL, id LIMIT 1
+            """, [.int(file)]) {
+            segment = ($0.int(0), SegmentKind(rawValue: $0.text(1) ?? "") ?? .name, $0.isNull(2) ? nil : $0.double(2),
+                       $0.isNull(3) ? nil : $0.double(3), $0.text(4))
+        }
+        return SearchHit(path: path, kind: kind, score: 1, z: nil, cosine: nil, keywordRank: nil, segment: segment.kind,
+                         segmentID: segment.id, loc: segment.loc, locEnd: segment.locEnd, excerpt: segment.excerpt,
+                         modified: modified, size: size, info: info)
     }
 
     /// Code: the stretch to point at, and the line in it to open at. A name looked up points at the stretch that

@@ -160,7 +160,7 @@ struct SearchPanelView: View {
             let weaker = controller.results.weaker.count
             return (count == 1 ? "1 result" : "\(count) results")
                 + (controller.isCode ? " in your code" : controller.isLike ? " like it" : "")
-                + (weaker > 0 ? " · \(weaker) weaker" : "")
+                + (weaker > 0 ? " · \(weaker) weaker" : "") + (controller.filterSummary.map { " · \($0)" } ?? "")
         }
     }
 }

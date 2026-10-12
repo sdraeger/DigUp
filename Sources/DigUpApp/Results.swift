@@ -96,7 +96,13 @@ struct ResultRow: Identifiable, Equatable {
 
     /// Why it's here, in a few words: "Matches the picture", "Matches the frame at 0:06".
     var reason: String {
-        guard matchedMeaning else { return matchedWords ? "Has your words" : "Matches its name" }
+        guard matchedMeaning else {
+            if matchedWords { return "Has your words" }
+            // Listed by the query's filter (`Searcher.listing`): its date.
+            let taken = info["taken"].flatMap(Searcher.taken).map { Date(timeIntervalSince1970: $0) }
+            return (taken == nil ? "Changed " : "Taken ")
+                + (taken ?? modified).formatted(date: .abbreviated, time: .omitted)
+        }
         let place = loc.map(Self.clock) ?? ""
         let page = loc.map { "page \(Int($0))" } ?? "a page"
         switch segment {
@@ -266,5 +272,26 @@ extension FileKind {
         case .video: "film"
         case .code: "chevron.left.forwardslash.chevron.right"
         }
+    }
+}
+
+extension QueryFilter {
+    /// What the query's filter keeps, for a status line: "PDFs · Mar 1 – 31, 2026", "Images · Since Sep 1, 2026".
+    var summary: String? {
+        var parts: [String] = []
+        if let kinds {
+            parts.append(kinds == [.pdf] ? "PDFs" : ResultGroupKind.files.filter { !$0.kinds.isDisjoint(with: kinds) }
+                .map(\.title).joined(separator: " and "))
+        }
+        if let dates {
+            let formatter = DateIntervalFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .none
+            let day = { (date: Date) in date.formatted(date: .abbreviated, time: .omitted) }
+            parts.append(dates.start == .distantPast ? "Before \(day(dates.end))"
+                         : abs(dates.end.timeIntervalSinceNow) < 5 ? "Since \(day(dates.start))"
+                         : formatter.string(from: dates.start, to: dates.end.addingTimeInterval(-1)))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

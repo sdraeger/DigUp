@@ -859,9 +859,13 @@ nonisolated final class Engine: @unchecked Sendable {
     /// shows while the query encoder starts. Files that are gone (deleted since the last sync, or on a drive that's
     /// unplugged) are left out.
     /// `code`: the code index (its own folders), never anything else.
+    /// The query's own filter words (`QueryFilter`: "PDFs from March about the lease") narrow it, and a query that's
+    /// all filter ("photos from last summer") lists what it lets through, newest first.
     func search(_ text: String, vector: QueryVector?, prefixLast: Bool, kinds: Set<FileKind>? = nil,
                 limit: Int = 40, code: Bool = false) async -> [SearchHit] {
         if code { return await searchCode(text, vector: vector, prefixLast: prefixLast, limit: limit) }
+        let filter = QueryFilter(text)
+        let kinds = Self.both(kinds, filter.kinds)
         return await withCheckedContinuation { continuation in
             searchQueue.async { [self] in
                 var values = vector?.values
@@ -872,11 +876,18 @@ nonisolated final class Engine: @unchecked Sendable {
                     }
                     values = nil
                 }
-                let hits = try? searcher?.search(text, queryVector: values, kinds: kinds, limit: limit,
-                                                 prefixLast: prefixLast)
+                let hits = filter.isListing ? try? searcher?.listing(kinds: kinds, dates: filter.dates, limit: limit)
+                    : try? searcher?.search(filter.text, queryVector: values, kinds: kinds, dates: filter.dates,
+                                            limit: limit, prefixLast: prefixLast)
                 continuation.resume(returning: visible(hits ?? []))
             }
         }
+    }
+
+    /// Kinds both allow (nil: any).
+    private static func both(_ a: Set<FileKind>?, _ b: Set<FileKind>?) -> Set<FileKind>? {
+        guard let a, let b else { return a ?? b }
+        return a.intersection(b)
     }
 
     /// Only files that are searched (`FolderSelection`'s rule, as the crawler walks them) and of types not skipped: a
@@ -1085,10 +1096,13 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
+    /// What's embedded of a query is what's left of it after its filter words (`QueryFilter`); nothing, for one that's
+    /// all filter.
     private func vector(for text: String, code: Bool) -> QueryVector? {
         let key = Self.cacheKey(text, code: code)
         if let cached = vectorCache[key] { return cached }
-        guard let worker = runningEncoder() else { return nil }
+        let text = code ? text : QueryFilter(text).text
+        guard !text.isEmpty, let worker = runningEncoder() else { return nil }
         defer { scheduleIdleExit() }
         do {
             let values = try worker.embedTexts([code ? Prompts.codeQuery(text) : Prompts.query(text)]).first ?? []

@@ -351,7 +351,7 @@ final class SearchModel {
             var counts: [ResultGroupKind: Int] = [:]
             for hit in all.prefix(Searcher.strongCount(all)) { counts[ResultGroupKind(hit.kind), default: 0] += 1 }
             self.counts = counts
-            results = ResultSet(shown, query: text)
+            results = ResultSet(shown, query: QueryFilter(text).text)
             showWeaker = false
             if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
             hasResults = true
@@ -527,8 +527,10 @@ struct SearchWindowView: View {
 
     private var resultCount: String {
         let count = search.results.ranked.count
+        let filter = search.isCode || LikeQuery.isLike(search.query) ? nil : QueryFilter(search.query).summary
         return (count == 1 ? "1 result" : "\(count) results")
             + (search.results.weaker.isEmpty ? "" : " · \(search.results.weaker.count) weaker")
+            + (filter.map { " · \($0)" } ?? "")
     }
 }
 

@@ -201,12 +201,14 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
+        // What the results' words are (the query's without its filter words), and whether it's all filter.
+        let (words, listing) = code ? (text, false) : (QueryFilter(text).text, QueryFilter(text).isListing)
         // Words now. The last word is probably half-typed, so it matches as a prefix.
         Task {
             let started = Date()
             let hits = await engine.search(text, vector: nil, prefixLast: true, code: code)
             guard current == generation, finalGeneration != current else { return }
-            show(hits, query: text, phase: .words)
+            show(hits, query: words, phase: .words)
             log("search \"\(typed)\": words \(hits.count) hits in \(ms(since: started))")
         }
         // Meaning results show once typing pauses, but they're computed now (embedding, then search), so they're
@@ -223,7 +225,7 @@ final class SearchPanelController {
             try? await Task.sleep(until: showAt, tolerance: .milliseconds(1), clock: .continuous)
             guard !Task.isCancelled, current == generation else { return }
             finalGeneration = current
-            show(hits, query: text, phase: vector == nil ? .wordsOnly : .meaning)
+            show(hits, query: words, phase: vector == nil && !listing ? .wordsOnly : .meaning)
             let shown = Date(), keystroke = typedAt
             log("search \"\(typed)\": \(vector == nil ? "words only" : "meaning") \(hits.count) hits "
                 + "(\(results.strongRows.count) strong) · embed \(ms(since: embedStarted, until: searchStarted)) · "
@@ -276,6 +278,9 @@ final class SearchPanelController {
             onFinalResults?()
         }
     }
+
+    /// What the query's own filter words keep ("PDFs · Mar 1 – 31, 2026"), for the status line.
+    var filterSummary: String? { isCode || isLike ? nil : QueryFilter(query).summary }
 
     /// ⌘S: keeps this search and says when new files match it (`SavedSearches.swift`); again, forgets it.
     func toggleSave() {
