@@ -58,7 +58,17 @@ enum DocExtractor {
         }
     }
 
-    static func readText(_ url: URL) throws -> String {
+    /// Only the first `IndexOptions.maxChunks` chunks (~8 million characters) are ever read, so plain text and HTML
+    /// are read up to this many bytes: a multi-gigabyte dump took ~4× its size in memory, again for every step.
+    static let maxTextBytes = 64 << 20
+
+    static func readText(_ url: URL, limit: Int = maxTextBytes) throws -> String {
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        if size > limit {   // shortcut: decoded as UTF-8 (what big dumps are); smaller files have their encoding found
+            let handle = try FileHandle(forReadingFrom: url)
+            defer { try? handle.close() }
+            return String(decoding: try handle.read(upToCount: limit) ?? Data(), as: UTF8.self)
+        }
         var encoding = String.Encoding.utf8
         if let text = try? String(contentsOf: url, usedEncoding: &encoding) { return text }
         return try String(contentsOf: url, encoding: .isoLatin1)

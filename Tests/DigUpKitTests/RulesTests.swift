@@ -9,6 +9,16 @@ import Testing
         return url
     }()
 
+    @Test func bigTextIsReadOnlyAsFarAsItCanBeIndexed() throws {
+        let file = folder.appendingPathComponent("dump.txt")
+        try "otters otters otters".write(to: file, atomically: true, encoding: .utf8)
+        #expect(try DocExtractor.readText(file, limit: 6) == "otters")
+        #expect(try DocExtractor.readText(file) == "otters otters otters")
+        let latin = folder.appendingPathComponent("latin.txt")
+        try Data([0x63, 0x61, 0x66, 0xE9]).write(to: latin)   // "café" in Latin-1: found as before when small
+        #expect(try DocExtractor.readText(latin) == "café")
+    }
+
     @Test func typeScriptIsNotVideo() throws {
         let file = folder.appendingPathComponent("app.ts")
         try "export const x: number = 1;\n".write(to: file, atomically: false, encoding: .utf8)
