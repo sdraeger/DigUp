@@ -1,15 +1,15 @@
 import CoreServices
 import Foundation
 
-/// File-level FSEvents on the chosen folders. Reports which paths changed, a batch at a time; the engine debounces
-/// and syncs. Costs nothing while nothing changes (no polling), and hidden files (.DS_Store, editors' temp files)
-/// are ignored, since browsing a folder in Finder writes those.
+/// File-level FSEvents on the chosen folders. Reports which paths changed (and whether each is a folder), a batch at
+/// a time; the engine debounces and syncs. Costs nothing while nothing changes (no polling), and hidden files
+/// (.DS_Store, editors' temp files) are ignored, since browsing a folder in Finder writes those.
 nonisolated final class FolderWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
-    private let handler: @Sendable ([String]) -> Void
+    private let handler: @Sendable ([(path: String, isFolder: Bool)]) -> Void
 
     init?(paths: [String], latency: TimeInterval, queue: DispatchQueue,
-          handler: @escaping @Sendable ([String]) -> Void) {
+          handler: @escaping @Sendable ([(path: String, isFolder: Bool)]) -> Void) {
         self.handler = handler
         guard !paths.isEmpty else { return nil }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
@@ -36,9 +36,9 @@ nonisolated final class FolderWatcher: @unchecked Sendable {
         FSEventStreamRelease(stream)
     }
 
-    fileprivate func received(_ paths: [String]) {
-        let relevant = paths.filter { path in
-            !path.split(separator: "/").contains { $0.hasPrefix(".") }
+    fileprivate func received(_ changes: [(path: String, isFolder: Bool)]) {
+        let relevant = changes.filter { change in
+            !change.path.split(separator: "/").contains { $0.hasPrefix(".") }
         }
         if !relevant.isEmpty { handler(relevant) }
     }
@@ -52,5 +52,7 @@ private nonisolated func folderWatcherCallback(
     guard let info else { return }
     let watcher = Unmanaged<FolderWatcher>.fromOpaque(info).takeUnretainedValue()
     let list = Unmanaged<CFArray>.fromOpaque(paths).takeUnretainedValue() as? [String] ?? []
-    watcher.received(list)
+    // Dropped events come as a folder to scan again, without the folder flag.
+    let folder = FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir | kFSEventStreamEventFlagMustScanSubDirs)
+    watcher.received(list.enumerated().map { (path: $1, isFolder: flags[$0] & folder != 0) })
 }

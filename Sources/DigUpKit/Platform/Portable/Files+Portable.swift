@@ -42,6 +42,11 @@ extension Rules {
         return .ignore
     }
 
+    /// By the name alone (a file that may be gone already): here that's how every file is classified.
+    static func classify(byName url: URL, options: IndexOptions) -> Classification {
+        classify(url, values: nil, options: options)
+    }
+
     /// Only macOS marks screenshots; elsewhere their names tell (`screenshotPrefixes` covers Snipping Tool, Win+PrtScn,
     /// GNOME and KDE: they all start with "Screenshot").
     static func hasScreenshotMarker(_ url: URL) -> Bool { false }

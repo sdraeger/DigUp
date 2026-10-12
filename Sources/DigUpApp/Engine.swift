@@ -119,9 +119,6 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // watchQueue only
     private var watcher: FolderWatcher?
-    /// The chosen folders and the skipped ones as the watcher reports paths (real paths too: /private/var for /var).
-    private var watchedRoots: [String] = []
-    private var watchedSkips: [String] = []
     private var syncDebounce: DispatchWorkItem?
     private var codeWatcher: FolderWatcher?
     private var codeSyncDebounce: DispatchWorkItem?
@@ -391,16 +388,10 @@ nonisolated final class Engine: @unchecked Sendable {
     /// Watches the chosen folders that are there (a missing one is picked up when a drive connects).
     private func startWatching() {
         watcher = nil
-        let (roots, excluded) = lock.withLock { (self.roots, self.excluded) }
-        let present = roots.filter(AppSettings.isFolder)
-        func spellings(_ folders: [URL]) -> [String] {
-            Array(Set(folders.flatMap { [$0.path, FolderSelection.realPath($0.path)] }))
-        }
-        watchedRoots = spellings(present)
-        watchedSkips = spellings(excluded)
+        let present = lock.withLock { roots }.filter(AppSettings.isFolder)
         guard !present.isEmpty else { return }
-        watcher = FolderWatcher(paths: present.map(\.path), latency: 0.25, queue: watchQueue) { [weak self] paths in
-            self?.foldersChanged(paths)
+        watcher = FolderWatcher(paths: present.map(\.path), latency: 0.25, queue: watchQueue) { [weak self] changes in
+            self?.foldersChanged(changes)
         }
         log(watcher == nil ? "watch: can't watch the folders" : "watch: \(present.count) folders")
     }
@@ -412,8 +403,8 @@ nonisolated final class Engine: @unchecked Sendable {
         codeChangedSince = nil
         let present = lock.withLock { codeRoots }.filter(AppSettings.isFolder)
         guard !present.isEmpty else { return }
-        codeWatcher = FolderWatcher(paths: present.map(\.path), latency: 2, queue: watchQueue) { [weak self] paths in
-            self?.codeChanged(paths)
+        codeWatcher = FolderWatcher(paths: present.map(\.path), latency: 2, queue: watchQueue) { [weak self] changes in
+            self?.codeChanged(changes.map(\.path))
         }
         log(codeWatcher == nil ? "watch: can't watch the code folders" : "watch: \(present.count) code folders")
     }
@@ -453,12 +444,15 @@ nonisolated final class Engine: @unchecked Sendable {
     }
 
     /// FSEvents, on watchQueue. Waits for things to settle (a copy in progress, a burst of screenshots), then asks
-    /// the helper to sync; a running batch yields to that at its next boundary.
-    private func foldersChanged(_ paths: [String]) {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let paths = paths.filter { path in
-            watchedRoots.contains { Rules.isWalked(path, root: $0, home: home, excluded: watchedSkips) }
-        }
+    /// the helper to sync; a running batch yields to that at its next boundary. Changes a sync wouldn't pick up (in
+    /// ~/Library, a code project, a skipped folder, or to a type that's never indexed) don't count: with a whole home
+    /// folder chosen, apps writing their own files would start a sync every few seconds.
+    private func foldersChanged(_ changes: [(path: String, isFolder: Bool)]) {
+        let (roots, excluded, types) = lock.withLock { (self.roots, self.excluded, self.excludedTypes) }
+        var options = IndexOptions()   // as the helper's (`startHelper`)
+        options.excludedFolders = excluded.map(\.path)
+        options.excludedExtensions = IndexOptions.extensions(types.joined(separator: ","))
+        let paths = Crawler.relevant(changes, roots: roots.map(\.path), options: options)
         guard !paths.isEmpty else { return }
         log("watch: \(paths.count) changed (\((paths.first as NSString?)?.lastPathComponent ?? ""))")
         syncDebounce?.cancel()

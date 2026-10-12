@@ -156,6 +156,62 @@ public enum Crawler {
     }
 }
 
+extension Crawler {
+    /// The changes FSEvents reported (paths, and whether each is a folder) that a crawl of `roots` could pick up, by
+    /// its own rules: none in or under a folder it doesn't walk into (hidden, an app or bundle, `Rules.skipReason`'s:
+    /// ~/Library, developer and .noindex folders, excluded ones), none to a file it never indexes (`Rules.classify`),
+    /// and inside a code project only pictures (it keeps screenshots there, and a removed one looks like any picture).
+    /// A folder counts unless it's skipped: one moved in brings its files. Not the code index's rules.
+    public static func relevant(_ changes: [(path: String, isFolder: Bool)], roots: [String],
+                                options: IndexOptions) -> [String] {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // Each root as `crawl` walks it: by its path and its real path, skipping only the excluded folders inside it.
+        let walks = roots.flatMap { root in
+            let real = FolderSelection.realPath(root)
+            let skips = options.excludedFolders.filter {
+                FolderSelection.isInside($0, root) || FolderSelection.isInside($0, real)
+            }.flatMap { [$0, FolderSelection.realPath($0)] }
+            return [(root: root, skips: skips), (root: real, skips: skips)]
+        }
+        var walked: [String: Bool] = [:]
+        var projects: [String: Bool] = [:]
+        func isWalked(_ folder: String, _ walk: (root: String, skips: [String])) -> Bool {
+            let key = walk.root + "\u{0}" + folder
+            if let known = walked[key] { return known }
+            let url = URL(fileURLWithPath: folder)
+            let answer = !url.lastPathComponent.hasPrefix(".")
+                && !FileSystem.isPackage(url, try? url.resourceValues(forKeys: [.isPackageKey]))
+                && Rules.skipReason(forFolder: url, home: home, excluded: walk.skips) == nil
+            walked[key] = answer
+            return answer
+        }
+        func isProject(_ folder: String) -> Bool {
+            if let known = projects[folder] { return known }
+            let answer = Rules.isProjectRoot(folder)
+            projects[folder] = answer
+            return answer
+        }
+        func picksUp(_ change: (path: String, isFolder: Bool), _ walk: (root: String, skips: [String])) -> Bool {
+            var folders: [String] = []   // between the root and the change (the change too, if it's a folder)
+            var folder = change.isFolder ? change.path : (change.path as NSString).deletingLastPathComponent
+            while FolderSelection.isInside(folder, walk.root) {
+                folders.append(folder)
+                folder = (folder as NSString).deletingLastPathComponent
+            }
+            guard folders.allSatisfy({ isWalked($0, walk) }) else { return false }
+            if change.isFolder { return true }
+            let url = URL(fileURLWithPath: change.path)
+            guard !url.lastPathComponent.hasPrefix("."),
+                  case .index(let kind) = Rules.classify(byName: url, options: options) else { return false }
+            return kind == .screenshot || kind == .image || !([walk.root] + folders).contains(where: isProject)
+        }
+        return changes.filter { change in
+            let containing = walks.filter { change.path == $0.root || FolderSelection.isInside(change.path, $0.root) }
+            return containing.isEmpty || containing.contains { picksUp(change, $0) }
+        }.map(\.path)
+    }
+}
+
 /// The git repos a code crawl walks through, and the files each keeps (`GitFiles`): a file git ignores (a build, an
 /// environment, data, a secret listed in .gitignore) isn't code search's to read. A folder that isn't in a repo, or a
 /// Mac without git, has no list: everything there counts.

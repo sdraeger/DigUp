@@ -28,6 +28,11 @@ extension Rules {
         return .ignore
     }
 
+    /// By the name alone (a file that may be gone already): its extension's type.
+    static func classify(byName url: URL, options: IndexOptions) -> Classification {
+        classify(url, type: UTType(filenameExtension: url.pathExtension), options: options)
+    }
+
     /// What the crawl asks, with the type among the file's resource values.
     static func classify(_ url: URL, values: URLResourceValues?, options: IndexOptions) -> Classification {
         classify(url, type: values?.contentType, options: options)
