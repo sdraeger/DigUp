@@ -1,5 +1,6 @@
 import Foundation
 import IOKit.ps
+import notify
 
 /// When the big first pass (backfill) may run: with the Mac cool (thermal state nominal or fair), not in Low Power
 /// Mode, and on AC power if indexing on battery is off (it's on by default). A few new files always index right away;
@@ -9,7 +10,7 @@ import IOKit.ps
 final class PowerPolicy {
     private var indexOnBattery: Bool
     private let onChange: (String?) -> Void
-    nonisolated(unsafe) private var powerSource: CFRunLoopSource?   // main thread, and deinit
+    nonisolated(unsafe) private var powerToken = NOTIFY_TOKEN_INVALID   // main thread, and deinit
     nonisolated(unsafe) private var observers: [NSObjectProtocol] = []
     private(set) var blocker: String?
 
@@ -19,10 +20,9 @@ final class PowerPolicy {
         self.onChange = onChange
         blocker = Self.backfillBlocker(indexOnBattery: indexOnBattery)
 
-        let me = Unmanaged.passUnretained(self).toOpaque()
-        if let source = IOPSNotificationCreateRunLoopSource(powerSourceChanged, me)?.takeRetainedValue() {
-            CFRunLoopAddSource(CFRunLoopGetMain(), source, .defaultMode)
-            powerSource = source
+        // AC/battery switches only: IOPSNotificationCreateRunLoopSource also fires on every battery percentage change.
+        notify_register_dispatch(kIOPSNotifyPowerSource, &powerToken, .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.reevaluate() }
         }
         for name in [ProcessInfo.thermalStateDidChangeNotification, Notification.Name.NSProcessInfoPowerStateDidChange] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) {
@@ -33,7 +33,7 @@ final class PowerPolicy {
     }
 
     deinit {
-        if let powerSource { CFRunLoopRemoveSource(CFRunLoopGetMain(), powerSource, .defaultMode) }
+        notify_cancel(powerToken)
         observers.forEach(NotificationCenter.default.removeObserver)
     }
 
@@ -43,7 +43,7 @@ final class PowerPolicy {
         reevaluate()
     }
 
-    fileprivate func reevaluate() {
+    private func reevaluate() {
         let now = Self.backfillBlocker(indexOnBattery: indexOnBattery)
         guard now != blocker else { return }
         blocker = now
@@ -67,14 +67,5 @@ final class PowerPolicy {
               let type = IOPSGetProvidingPowerSourceType(snapshot)?.takeUnretainedValue() as String?
         else { return true }   // no power-source info: a desktop Mac
         return type == kIOPMACPowerKey
-    }
-}
-
-/// IOKit calls this on the main run loop when the power source changes.
-private nonisolated func powerSourceChanged(_ context: UnsafeMutableRawPointer?) {
-    guard let context else { return }
-    let address = UInt(bitPattern: context)
-    MainActor.assumeIsolated {
-        Unmanaged<PowerPolicy>.fromOpaque(UnsafeRawPointer(bitPattern: address)!).takeUnretainedValue().reevaluate()
     }
 }
