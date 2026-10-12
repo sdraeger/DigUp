@@ -292,7 +292,7 @@ final class SearchModel {
         }
         if LikeQuery.isLike(typed) {
             // Its path still being typed (the field completes it): nothing yet.
-            guard let path = LikeQuery.path(of: typed), SearchPanelController.isFilePath(path) else {
+            guard let path = ScreenRegion.path(of: typed), SearchPanelController.isFilePath(path) else {
                 results = .empty
                 counts = [:]
                 hasResults = false

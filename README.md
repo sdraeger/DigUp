@@ -37,6 +37,8 @@ whatever kind of file it is. All of it happens on your Mac.
   yesterday" (when a file changed, or when a photo was taken)
 - a question gets an answer: "when does my lease end?" is answered from your files, citing the pages it read, by
   Apple's on-device model (macOS 26 with Apple Intelligence; it stays on your Mac)
+- a part of the screen is a search too: press ⌘R in the panel, pick it, and get the files most like it (a chart finds
+  the report it came from)
 - "duplicate photos" or "copies of the lease" finds copies: the same file twice, a resized or re-saved picture, a
   re-exported PDF. DigUp only shows them; it never deletes anything
 
@@ -70,6 +72,7 @@ DigUp needs an Apple Silicon Mac with macOS 14 or later (it's tested on macOS 26
 | ⌘C | Copies the file, to paste anywhere |
 | ⌘O | The same search in a bigger window, with a picture grid and filters |
 | ⌘L | More like this: the files most like the selected result, at its page or moment |
+| ⌘R | Search by a part of the screen: pick it with the crosshair (Space picks a window) |
 | ⌘S | Saves the search (or forgets it): a notification says when new files match it. An empty field lists them |
 
 DigUp lives in the menu bar, where you can see how indexing is going, pause it, or open Settings. The first time a

@@ -197,7 +197,7 @@ final class SearchPanelController {
         // A file dropped into the field leaves its path there: search by it.
         if Self.isFilePath(typed) { return query = LikeQuery.query((typed as NSString).expandingTildeInPath) }
         if LikeQuery.isLike(typed) {
-            guard let path = LikeQuery.path(of: typed), Self.isFilePath(path) else { return typingLike() }
+            guard let path = ScreenRegion.path(of: typed), Self.isFilePath(path) else { return typingLike() }
             return searchLike(path, generation: current)
         }
         isLike = false
@@ -289,6 +289,18 @@ final class SearchPanelController {
                 answer?.done = true
                 log("answer \"\(question)\": \(error)")
             }
+        }
+    }
+
+    /// ⌘R, or the dashed-rectangle button: the files most like a part of the screen (`ScreenRegion`). The panel steps
+    /// aside while you pick it, and comes back as it was if you don't.
+    func searchScreenRegion() {
+        hide()
+        Task {
+            guard await ScreenRegion.pick() else { return show() }
+            show()
+            example = nil
+            if query == ScreenRegion.query { queryChanged() } else { query = ScreenRegion.query }
         }
     }
 
@@ -504,6 +516,9 @@ final class SearchPanelController {
             app.toggleSaved(String(selection!.dropFirst()))
             selection = nil
             resizeWindow()
+            return true
+        case 15 where modifiers == .command:  // ⌘R: search by a part of the screen
+            searchScreenRegion()
             return true
         case 37 where modifiers == .command:  // ⌘L: More Like This
             likeSelected()

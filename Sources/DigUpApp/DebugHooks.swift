@@ -21,6 +21,7 @@ import SwiftUI
 ///                             logs how long after the last keystroke they arrived
 ///     -debugCompose YES       then compose 사업자 the way a Korean input method does (marked text) while results
 ///                             arrive, and log whether the composition held
+///     -debugRegion <png>      search by a part of the screen (⌘R) with this picture as the part picked
 ///     -debugSelect "<name>"   before the snapshot, select the first result whose name contains <name>
 ///     -debugPlay YES          after the snapshot, play the selected recording from its moment (muted) for 1.5 s and
 ///                             log where playback got to
@@ -245,6 +246,7 @@ enum DebugHooks {
             }
         }
         panel.show()
+        if UserDefaults.standard.string(forKey: "debugRegion") != nil { return panel.searchScreenRegion() }
         panel.query = text
     }
 

@@ -44,6 +44,14 @@ struct SearchPanelView: View {
             if controller.phase == .words, controller.encoder == .starting {
                 ProgressView().controlSize(.small)
             }
+            Button { controller.searchScreenRegion() } label: {
+                Image(systemName: "rectangle.dashed")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Search by a part of the screen (⌘R)")
+            .accessibilityLabel("Search by a part of the screen")
             if controller.isSaved {
                 Image(systemName: "bookmark.fill")
                     .foregroundStyle(.secondary)
