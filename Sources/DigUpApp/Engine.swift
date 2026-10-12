@@ -390,7 +390,8 @@ nonisolated final class Engine: @unchecked Sendable {
         watcher = nil
         let present = lock.withLock { roots }.filter(AppSettings.isFolder)
         guard !present.isEmpty else { return }
-        watcher = FolderWatcher(paths: present.map(\.path), latency: 0.25, queue: watchQueue) { [weak self] changes in
+        watcher = FolderWatcher(paths: present.map(\.path), excluding: quietFolders(inside: present), latency: 0.25,
+                                queue: watchQueue) { [weak self] changes in
             self?.foldersChanged(changes)
         }
         log(watcher == nil ? "watch: can't watch the folders" : "watch: \(present.count) folders")
@@ -403,10 +404,20 @@ nonisolated final class Engine: @unchecked Sendable {
         codeChangedSince = nil
         let present = lock.withLock { codeRoots }.filter(AppSettings.isFolder)
         guard !present.isEmpty else { return }
-        codeWatcher = FolderWatcher(paths: present.map(\.path), latency: 2, queue: watchQueue) { [weak self] changes in
+        codeWatcher = FolderWatcher(paths: present.map(\.path), excluding: quietFolders(inside: present), latency: 2,
+                                    queue: watchQueue) { [weak self] changes in
             self?.codeChanged(changes.map(\.path))
         }
         log(codeWatcher == nil ? "watch: can't watch the code folders" : "watch: \(present.count) code folders")
+    }
+
+    /// Folders in `roots` that change all the time and never concern an index: ~/Library, which no crawl enters, and
+    /// the index's own folder, where every log line and database write would wake the watcher again.
+    private func quietFolders(inside roots: [URL]) -> [String] {
+        let library = FileManager.default.homeDirectoryForCurrentUser.path + "/Library"
+        return [library, indexDirectory.path].filter { folder in
+            roots.contains { FolderSelection.isInside(folder, $0.path) }
+        }
     }
 
     /// FSEvents in the code folders, on watchQueue. Code that's being worked on changes all the time: the code index

@@ -3,12 +3,13 @@ import Foundation
 
 /// File-level FSEvents on the chosen folders. Reports which paths changed (and whether each is a folder), a batch at
 /// a time; the engine debounces and syncs. Costs nothing while nothing changes (no polling), and hidden files
-/// (.DS_Store, editors' temp files) are ignored, since browsing a folder in Finder writes those.
+/// (.DS_Store, editors' temp files) are ignored, since browsing a folder in Finder writes those. `excluding` (up to
+/// 8 folders inside `paths`) never reaches the app at all: ~/Library changes many times a second.
 nonisolated final class FolderWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let handler: @Sendable ([(path: String, isFolder: Bool)]) -> Void
 
-    init?(paths: [String], latency: TimeInterval, queue: DispatchQueue,
+    init?(paths: [String], excluding: [String] = [], latency: TimeInterval, queue: DispatchQueue,
           handler: @escaping @Sendable ([(path: String, isFolder: Bool)]) -> Void) {
         self.handler = handler
         guard !paths.isEmpty else { return nil }
@@ -20,6 +21,7 @@ nonisolated final class FolderWatcher: @unchecked Sendable {
                                                paths as CFArray, FSEventStreamEventId(kFSEventStreamEventIdSinceNow),
                                                latency, FSEventStreamCreateFlags(flags)) else { return nil }
         self.stream = stream
+        if !excluding.isEmpty { FSEventStreamSetExclusionPaths(stream, Array(excluding.prefix(8)) as CFArray) }
         FSEventStreamSetDispatchQueue(stream, queue)
         guard FSEventStreamStart(stream) else {
             FSEventStreamInvalidate(stream)
