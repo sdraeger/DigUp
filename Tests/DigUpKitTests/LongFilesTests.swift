@@ -51,6 +51,28 @@ import Testing
         return out
     }
 
+    /// Files are saved a second's worth at a time (`Indexer.process`): a stop saves the ones done before it, where
+    /// another connection (the app's) sees them.
+    @Test func aStopSavesWhatWasDone() throws {
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        for number in 1...6 {
+            try "Note \(number) about otters and their dens.".write(to: files.appendingPathComponent("note\(number).txt"),
+                                                                    atomically: true, encoding: .utf8)
+        }
+        let store = try store()
+        let indexer = try indexer(store, FakeEmbedder())
+        _ = try indexer.sync([files])
+        let app = try IndexStore(directory: folder.appendingPathComponent("index"))
+        var events = 0
+        _ = try indexer.run(shouldStop: { events >= 3 }) { _ in events += 1 }
+        #expect(events == 3)
+        #expect(try found(app, "otters").count == 3)
+        #expect(try store.pending(limit: nil, only: nil).count == 3)
+        _ = try indexer.run()
+        #expect(try store.pending(limit: nil, only: nil).isEmpty)
+        #expect(try found(app, "otters").count == 6)
+    }
+
     @Test func longPDFIsReadInSteps() throws {
         let pdf = try makePDF("Field guide.pdf", pages: 120, special: [100: "quokka"])
         let store = try store()

@@ -59,7 +59,11 @@ public final class Database {
     public func run(_ sql: String, _ values: [SQLValue] = []) throws { try query(sql, values) }
 
     @discardableResult
+    /// Runs `body` in a transaction: all of it or none of it. Inside one already open (`Indexer.process` saves files in
+    /// groups) it's part of that one, and a failure is the outer one's to undo: a savepoint each would make FTS5 write
+    /// its pending terms out every time, ~4× the bytes of indexing without.
     public func transaction<T>(_ body: () throws -> T) throws -> T {
+        if sqlite3_get_autocommit(handle) == 0 { return try body() }
         try execute("BEGIN IMMEDIATE")
         do {
             let result = try body()

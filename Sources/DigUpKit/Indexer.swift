@@ -171,7 +171,7 @@ public final class Indexer {
     }
 
     /// The later pass: reads the rest of long PDFs and documents (`partial` after their first step), in indexing order,
-    /// a step at a time. Each step is saved as one transaction, so stopping between steps (pausing, new files going
+    /// a step at a time. Each step is saved whole (a savepoint), so stopping between steps (pausing, new files going
     /// first) loses nothing, and the next pass goes on from there. It runs once nothing is pending: a book's last
     /// pages matter less than everything else's first ones, and they take a while (0.04–0.2 s a page, 2026-10-09).
     @discardableResult
@@ -218,10 +218,22 @@ public final class Indexer {
     /// Two stages overlap: while the model embeds one job, the next one is read and decoded on another thread
     /// (images scaled, screenshots OCR'd, PDF pages rendered, audio and video decoded). OCR alone is ~0.24 s per Retina
     /// screenshot, about as long as embedding it.
+    /// Jobs are saved a second's worth at a time, in one transaction: a commit per file wrote the index's pages and a
+    /// new FTS5 segment every time, ~4× the bytes of a first pass (`Database.transaction`). `committed` runs as each
+    /// job is through (other connections see it within the second). A stop, or an error before a job writes (the
+    /// model died), saves what's through. A database error in a job's writes can't be undone for that job alone: the
+    /// group goes (its files wait for the next run) and the job's files are marked failed, so they aren't retried
+    /// in a loop. A crash loses at most that second, which the next run does again.
     private func process(_ jobs: [Job], shouldStop: () -> Bool,
                          committed: (Int, Job, [(String, String?)], Double) -> Void,
                          skip: (Job) -> Bool = { _ in false }) throws {
         var ahead: PendingBatch?
+        var groupStarted: Date?
+        func save() throws {
+            guard groupStarted != nil else { return }
+            try store.db.execute("COMMIT")
+            groupStarted = nil
+        }
         defer {
             // A job prepared for a run that stopped early: throw its files away.
             if let ahead { try? FileManager.default.removeItem(at: ahead.wait().folder) }
@@ -229,6 +241,7 @@ public final class Indexer {
                 MeasuredCosts.merge(measured, into: costsFolder)
                 measured = MeasuredCosts()
             }
+            try? save()   // what was done before an error or a stop
         }
         for (index, job) in jobs.enumerated() {
             guard !shouldStop() else { break }
@@ -237,14 +250,30 @@ public final class Indexer {
             ahead = index + 1 < jobs.count ? prepare(jobs[index + 1]) : nil
             defer { try? FileManager.default.removeItem(at: prepared.folder) }
             guard !skip(job) else { continue }
+            if groupStarted == nil {
+                try store.db.execute("BEGIN IMMEDIATE")
+                groupStarted = Date()
+            }
             // The helper's and the CLI's main thread has no run loop to drain what Foundation autoreleases while a job
             // commits: without a pool per job it all stayed until the process exited (~30 KB a text chunk).
             let modelWasRunning = worker != nil
-            let results = try autoreleasepool { try commit(prepared) }
+            let results: [(String, String?)]
+            do {
+                results = try autoreleasepool { try commit(prepared) }
+            } catch let error as Database.Failure {
+                try? store.db.execute("ROLLBACK")
+                groupStarted = nil
+                if job.step == nil {
+                    for file in job.files { try? store.finish(file.id, state: "failed", detail: "\(error)") }
+                }
+                throw error
+            }
             let seconds = Date().timeIntervalSince(started)
             if modelWasRunning { measure(prepared, seconds: seconds) }   // else it's seconds of the model starting
             committed(index, job, results, seconds / Double(job.files.count))
+            if let groupStarted, Date().timeIntervalSince(groupStarted) >= 1 { try save() }
         }
+        try save()
     }
 
     /// What a job read and how long it took (its reading and its model's work, which overlap), for `MeasuredCosts`.
@@ -516,6 +545,8 @@ public final class Indexer {
             throw error
         } catch let error as IndexerError {
             throw error
+        } catch let error as Database.Failure {
+            throw error   // its writes so far can't be undone here (`process`)
         } catch {
             if let step = prepared.step { return [try stopReading(batch[0], at: step.lowerBound, because: "\(error)")] }
             for (slot, file) in batch.enumerated() where prepared.outcomes[slot] == nil {
