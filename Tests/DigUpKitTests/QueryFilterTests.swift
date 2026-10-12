@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import DigUpKit
 
-/// Plain-language filters: what's taken out of a query as dates and kinds, and what's left to search.
+/// Plain-language filters: what's taken out of a query as dates, kinds and "duplicates", and what's left to search.
 @Suite struct QueryFilterTests {
     let calendar: Calendar = {
         var calendar = Calendar(identifier: .gregorian)
@@ -57,10 +57,20 @@ import Testing
         #expect(filter("screenshots").kinds == [.screenshot] && filter("screenshots").isListing)
         #expect(filter("from yesterday").isListing && filter("from yesterday").kinds == nil)
     }
+
+    @Test func duplicates() {
+        let photos = filter("duplicate photos")
+        #expect(photos.duplicates && photos.kinds == [.image] && photos.text.isEmpty && !photos.isListing)
+        let lease = filter("copies of the lease")
+        #expect(lease.duplicates && lease.text == "the lease" && lease.kinds == nil)
+        let near = filter("near duplicates from 2025")
+        #expect(near.duplicates && near.text.isEmpty && near.dates?.start == day(2025, 1, 1))
+    }
 }
 
-/// What a filter does to search: dates and kinds narrow it, and a query that's all filter lists files newest first.
-@Suite final class ListingTests {
+/// What a filter does to search: dates and kinds narrow it, a query that's all filter lists files newest first, and
+/// "duplicates" finds the files whose vectors are nearly the same.
+@Suite final class ListingAndDuplicatesTests {
     let folder: URL = {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("DigUpTests-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
@@ -86,7 +96,7 @@ import Testing
         return v.map { $0 / norm }
     }
 
-    @Test func filtersAndListings() throws {
+    @Test func filtersListingsAndDuplicates() throws {
         let store = try IndexStore(directory: folder)
         let now = Date().timeIntervalSince1970
         var inode: UInt64 = 0
@@ -119,5 +129,12 @@ import Testing
         #expect(try !searcher.listing(kinds: nil, dates: nil, limit: 100).map(\.path).contains("/x/tiny.png"))
         #expect(try searcher.search("", queryVector: vector(1), dates: summer, zGate: -10).map(\.path)
                 == ["/x/beach.jpg", "/x/forest.jpg"])
+
+        let sets = try searcher.duplicates(kinds: nil, dates: nil).map { $0.map(\.path) }
+        // The most room taken twice first; each oldest first (a photo by when it was taken).
+        #expect(sets == [["/x/lease.pdf", "/x/lease copy.pdf"],
+                         ["/x/beach.jpg", "/x/beach small.jpg", "/x/Screenshot beach.png"]])
+        #expect(try searcher.duplicates(kinds: [.pdf], dates: nil).count == 1)
+        #expect(try searcher.duplicates(kinds: nil, dates: nil, among: ["/x/beach.jpg", "/x/forest.jpg"]).isEmpty)
     }
 }

@@ -300,7 +300,7 @@ public final class Searcher {
         return try files.prefix(limit).map { try hit(file: $0) }
     }
 
-    /// A file as a listing's result: its first vector's segment, else its name.
+    /// A file as a result of its own (a listing's, a set of duplicates'): its first vector's segment, else its name.
     private func hit(file: Int64) throws -> SearchHit {
         let (path, kind, modified, size, info) = try fileRow(file)
         var segment = (id: Int64(0), kind: SegmentKind.name, loc: Double?.none, locEnd: Double?.none,
@@ -314,6 +314,98 @@ public final class Searcher {
         return SearchHit(path: path, kind: kind, score: 1, z: nil, cosine: nil, keywordRank: nil, segment: segment.kind,
                          segmentID: segment.id, loc: segment.loc, locEnd: segment.locEnd, excerpt: segment.excerpt,
                          modified: modified, size: size, info: info)
+    }
+
+    /// How close two files' vectors must be for `duplicates` (cosine of each file's vectors averaged). On a set of 140
+    /// files (2026-10-11): copies, re-saved, resized, cropped and shifted photos 0.974 and up, against 0.862 at most
+    /// for two different flower photos; copies and re-exports of a PDF 0.988 and up, a renamed copy of a note 0.955
+    /// (its name is in what's embedded), against 0.819 at most for invoices of one template and 0.867 for a PDF and a
+    /// note of the same words. A screenshot shrunk to half its size (its text no longer legible) falls to 0.88-0.95,
+    /// and wallpapers of one design in other colors reach 0.97.
+    static func duplicateThreshold(_ kind: FileKind) -> Float { kind == .pdf || kind == .doc ? 0.92 : 0.95 }
+
+    /// Sets of files that are copies of each other, or nearly (re-saved, resized, cropped a little, re-exported), among
+    /// those `kinds` and `dates` let through (and in `paths`, when given): the pairs past `duplicateThreshold`, joined
+    /// up. Pictures are compared with pictures and screenshots, documents with PDFs. Each set is oldest first; the sets
+    /// that take the most room twice come first.
+    public func duplicates(kinds: Set<FileKind>?, dates: DateInterval?, among paths: Set<String>? = nil) throws
+        -> [[SearchHit]] {
+        if !vectorsLoaded { try reload() }
+        guard let matrix else { return [] }
+        let allowed = try filter(kinds: kinds, dates: dates)
+        var only: Set<Int64>?
+        if let paths {
+            only = []
+            for path in paths {
+                try store.db.query("SELECT id FROM files WHERE path = ?", [.text(path)]) { only!.insert($0.int(0)) }
+            }
+        }
+        var rowsOf: [Int64: [Int]] = [:]
+        for (row, file) in rowFile.enumerated() where (only?.contains(file) ?? true) && allowed(file) {
+            rowsOf[file, default: []].append(row)
+        }
+        // A file's vectors averaged, kept as float16 like the index's.
+        let files = rowsOf.keys.sorted()
+        guard files.count > 1, let averages = VectorStorage(rows: files.count) else { return [] }
+        let dimension = Vectors.dimension
+        var sum = [Float](repeating: 0, count: dimension)
+        for (index, file) in files.enumerated() {
+            for at in 0..<dimension { sum[at] = 0 }
+            for row in rowsOf[file]! {
+                Vectors.floats(fromHalf: matrix.halves + row * dimension, count: dimension, to: averages.block)
+                for at in 0..<dimension { sum[at] += averages.block[at] }
+            }
+            let norm = max(sum.reduce(0) { $0 + $1 * $1 }.squareRoot(), 1e-6)
+            for (at, value) in sum.enumerated() { averages.halves[index * dimension + at] = Float16(value / norm) }
+        }
+        // Every pair within a family, a block of rows against a block of columns at a time.
+        var parent = Array(files.indices)
+        func root(_ index: Int) -> Int {
+            var index = index
+            while parent[index] != index { (parent[index], index) = (parent[parent[index]], parent[index]) }
+            return index
+        }
+        let families = files.map { file -> Int in
+            switch fileKind[file] {
+            case .image, .screenshot: 0
+            case .pdf, .doc: 1
+            case .audio: 2
+            default: 3
+            }
+        }
+        let thresholds = files.map { Self.duplicateThreshold(fileKind[$0] ?? .image) }
+        let lowest = thresholds.min() ?? 1
+        let block = VectorStorage.blockRows
+        var columns = [Float](repeating: 0, count: block * dimension)
+        var products = [Float](repeating: 0, count: block * block)
+        for first in stride(from: 0, to: files.count, by: block) {
+            let rows = min(block, files.count - first)
+            Vectors.floats(fromHalf: averages.halves + first * dimension, count: rows * dimension, to: averages.block)
+            for second in stride(from: first, to: files.count, by: block) {
+                let count = min(block, files.count - second)
+                Vectors.floats(fromHalf: averages.halves + second * dimension, count: count * dimension, to: &columns)
+                // (rows × 768) · (count × 768)ᵀ
+                Vectors.products(of: averages.block, rows: rows, with: columns, count: count, into: &products)
+                for i in 0..<rows {
+                    let a = first + i
+                    // The score first: hardly any pair gets past it (20,000 pictures: 4 s → 0.3 s).
+                    for j in (second == first ? i + 1 : 0)..<count where products[i * count + j] >= lowest {
+                        let b = second + j
+                        guard families[a] == families[b], products[i * count + j] >= thresholds[a] else { continue }
+                        parent[root(a)] = root(b)
+                    }
+                }
+            }
+        }
+        var sets: [Int: [Int64]] = [:]
+        for index in files.indices { sets[root(index), default: []].append(files[index]) }
+        let fileDates = try self.dates()
+        return try sets.values.filter { $0.count > 1 }.map { set in
+            try set.sorted { (fileDates[$0] ?? 0, $0) < (fileDates[$1] ?? 0, $1) }.map { try hit(file: $0) }
+        }.sorted { a, b in
+            let wasted = { (set: [SearchHit]) in set.reduce(0) { $0 + $1.size } - (set.map(\.size).max() ?? 0) }
+            return wasted(a) > wasted(b) || (wasted(a) == wasted(b) && a[0].path < b[0].path)
+        }
     }
 
     /// Code: the stretch to point at, and the line in it to open at. A name looked up points at the stretch that

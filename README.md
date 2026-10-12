@@ -35,6 +35,8 @@ whatever kind of file it is. All of it happens on your Mac.
 - a saved search keeps watching: save "receipts" with ⌘S, and DigUp tells you when a new file matches it
 - a search can say when and what: "PDFs from March about the lease", "photos from last summer", "screenshots from
   yesterday" (when a file changed, or when a photo was taken)
+- "duplicate photos" or "copies of the lease" finds copies: the same file twice, a resized or re-saved picture, a
+  re-exported PDF. DigUp only shows them; it never deletes anything
 
 Exact words count too. Invoice numbers, error codes and names are matched as written, in file names, document text
 and the text inside screenshots, so a search gets both the meaning and the exact string.

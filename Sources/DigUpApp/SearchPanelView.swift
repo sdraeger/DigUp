@@ -75,6 +75,10 @@ struct SearchPanelView: View {
                     Text("DigUp only searches the folders you pick.").foregroundStyle(.secondary)
                     Button("Choose Folders…") { controller.chooseFolders() }
                         .padding(.top, 4)
+                } else if controller.isDuplicates {
+                    Text("No copies found").font(.system(size: 15, weight: .semibold))
+                    Text("Copies, re-saved or resized pictures and re-exported documents would show up here.")
+                        .foregroundStyle(.secondary)
                 } else if controller.isLike {
                     Text("Nothing much like it").font(.system(size: 15, weight: .semibold))
                     Text("It's compared with the files in your folders, by what they show, say or read.")
@@ -146,6 +150,7 @@ struct SearchPanelView: View {
         if let note = controller.note { return note }
         switch controller.phase {
         case .words:
+            if controller.isDuplicates { return "Comparing files…" }
             return controller.encoder == .starting ? "Matching words; meaning search is warming up…" : "Matching words…"
         case .wordsOnly:
             return controller.model.meaningUnavailable ?? "Words only: meaning search isn't available"
@@ -158,8 +163,10 @@ struct SearchPanelView: View {
             if !controller.isCode, let caveat = controller.model.resultsCaveat { return caveat }
             let count = controller.results.strongRows.count
             let weaker = controller.results.weaker.count
-            return (count == 1 ? "1 result" : "\(count) results")
-                + (controller.isCode ? " in your code" : controller.isLike ? " like it" : "")
+            let sets = controller.results.groups.count
+            let found = controller.isDuplicates ? (sets == 1 ? "1 set of copies" : "\(sets) sets of copies")
+                : (count == 1 ? "1 result" : "\(count) results")
+            return found + (controller.isCode ? " in your code" : controller.isLike ? " like it" : "")
                 + (weaker > 0 ? " · \(weaker) weaker" : "") + (controller.filterSummary.map { " · \($0)" } ?? "")
         }
     }
@@ -173,7 +180,7 @@ private struct ResultList: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1) {
                     ForEach(controller.results.groups) { group in
-                        GroupHeader(title: group.kind.title)
+                        GroupHeader(title: group.title)
                         ForEach(group.rows) { row in
                             PanelRow(row: row, selected: row.id == controller.selection)
                                 .id(row.id)

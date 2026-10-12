@@ -23,5 +23,11 @@ extension Vectors {
             scores[row] = sum.sum()
         }
     }
+
+    /// `products[i × count + j]` = row `i` of `a` (`rows` rows) · row `j` of `b` (`count` rows), `dimension` floats each.
+    static func products(of a: UnsafePointer<Float>, rows: Int, with b: UnsafePointer<Float>, count: Int,
+                         into products: UnsafeMutablePointer<Float>) {
+        for row in 0..<rows { scores(of: b, count: count, query: a + row * dimension, into: products + row * count) }
+    }
 }
 #endif

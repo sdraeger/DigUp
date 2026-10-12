@@ -320,6 +320,25 @@ final class SearchModel {
             codePhase = engine.hasCode ? .codeHint : .codeOff
             return
         }
+        if !code, QueryFilter(text).duplicates {
+            let filter = self.filter
+            task = Task {
+                try? await Task.sleep(for: .milliseconds(400))   // not for each key typed on the way to "duplicates"
+                guard !Task.isCancelled else { return }
+                let all = await engine.duplicates(text)
+                guard !Task.isCancelled, current == generation else { return }
+                var counts: [ResultGroupKind: Int] = [:]
+                for set in all { counts[ResultGroupKind(set[0].kind), default: 0] += 1 }
+                self.counts = counts
+                let shown = filter.map { filter in all.filter { filter.kinds.contains($0[0].kind) } } ?? all
+                results = ResultSet(duplicates: shown)
+                showWeaker = false
+                if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
+                hasResults = true
+                log("window: duplicates \"\(text)\": \(results.groups.count) sets")
+            }
+            return
+        }
         engine.prewarm()
         engine.embedAhead(text, code: code)
         let filter = self.filter
@@ -475,6 +494,9 @@ struct SearchWindowView: View {
             CodeOffOrHint(phase: phase, search: search) { app.chooseCodeFolders() }
         } else if !search.hasResults {
             ProgressView().controlSize(.small).frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if search.results.isEmpty, QueryFilter(search.query).duplicates {
+            EmptyState(symbol: "square.on.square", title: "No copies found",
+                       message: "Copies, re-saved or resized pictures and re-exported documents would show up here.")
         } else if search.results.isEmpty {
             EmptyState(symbol: search.isCode ? FileKind.code.symbol : "magnifyingglass",
                        title: "No good matches for “\(search.query.trimmingCharacters(in: .whitespaces))”",
@@ -526,9 +548,10 @@ struct SearchWindowView: View {
     }
 
     private var resultCount: String {
-        let count = search.results.ranked.count
+        let count = search.results.ranked.count, sets = search.results.groups.count
         let filter = search.isCode || LikeQuery.isLike(search.query) ? nil : QueryFilter(search.query).summary
-        return (count == 1 ? "1 result" : "\(count) results")
+        return (search.results.isDuplicates ? (sets == 1 ? "1 set of copies" : "\(sets) sets of copies")
+                : count == 1 ? "1 result" : "\(count) results")
             + (search.results.weaker.isEmpty ? "" : " · \(search.results.weaker.count) weaker")
             + (filter.map { " · \($0)" } ?? "")
     }
@@ -594,11 +617,26 @@ private struct ResultsGrid: View {
         GeometryReader { geometry in
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.cell.width, maximum: 230), spacing: 14)],
-                              alignment: .leading, spacing: 18) {
-                        ForEach(search.results.ranked) { row in cell(row) }
+                    if search.results.isDuplicates {
+                        // A set of copies each, under its heading.
+                        ForEach(search.results.groups) { group in
+                            GroupHeader(title: group.title)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.horizontal, 8)
+                            LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.cell.width, maximum: 230),
+                                                         spacing: 14)], alignment: .leading, spacing: 18) {
+                                ForEach(group.rows) { row in cell(row) }
+                            }
+                            .padding(.horizontal, 16)
+                            .padding(.bottom, 10)
+                        }
+                    } else {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: Self.cell.width, maximum: 230), spacing: 14)],
+                                  alignment: .leading, spacing: 18) {
+                            ForEach(search.results.ranked) { row in cell(row) }
+                        }
+                        .padding(16)
                     }
-                    .padding(16)
                     if !search.results.weaker.isEmpty {
                         WeakerToggle(count: search.results.weaker.count, expanded: search.showWeaker) {
                             search.showWeaker.toggle()

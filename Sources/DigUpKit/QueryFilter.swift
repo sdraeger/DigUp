@@ -2,24 +2,33 @@ import Foundation
 
 /// What a query says, in plain words, about which files to look in, apart from what's in them: "PDFs from March about
 /// the lease" looks for the lease, in PDFs, from March. A date filters by when a file was changed (a photo: taken). A
-/// kind word up front filters when it comes with a date or alone ("photos from last summer", "screenshots"); otherwise
-/// it stays a hint, as before ("screenshot of the error"). The filter's words leave the text that's searched. English
-/// only; seasons are the northern hemisphere's.
+/// kind word up front filters when it comes with a date, with "duplicate", or alone ("photos from last summer",
+/// "duplicate PDFs", "screenshots"); otherwise it stays a hint, as before ("screenshot of the error"). The filter's
+/// words leave the text that's searched. English only; seasons are the northern hemisphere's.
 public struct QueryFilter: Equatable, Sendable {
     /// The query without the filter's words.
     public var text: String
     public var kinds: Set<FileKind>?
     /// Changed (or taken) in this; open ends are `Date.distantPast` and now.
     public var dates: DateInterval?
+    /// "duplicate photos", "copies of the lease": files that are copies of each other (`Searcher.duplicates`).
+    public var duplicates = false
 
     /// Nothing left to search for: what the filter lets through, newest first (`Searcher.listing`).
-    public var isListing: Bool { (kinds != nil || dates != nil) && Searcher.terms(text).isEmpty }
+    public var isListing: Bool { !duplicates && (kinds != nil || dates != nil) && Searcher.terms(text).isEmpty }
 
     public init(_ query: String, now: Date = Date(), calendar: Calendar = .current) {
         let words = Self.words(query)
         var cut: [Range<String.Index>] = []
         func drop(_ indices: Range<Int>) {
             cut.append(words[indices.lowerBound].range.lowerBound..<words[indices.upperBound - 1].range.upperBound)
+        }
+        // Duplicates: "duplicate(s)", "dupes", "copies", "identical", with "near" before.
+        var duplicates = false
+        for index in words.indices where Self.duplicateWords.contains(words[index].word) {
+            duplicates = true
+            drop(index > 0 && words[index - 1].word == "near" ? index - 1..<index + 1 : index..<index + 1)
+            if index + 1 < words.count, words[index + 1].word == "of" { drop(index + 1..<index + 2) }
         }
         // The first date phrase, with its preposition (and a verb before that: "taken in", "saved on").
         var dates: DateInterval?
@@ -49,7 +58,7 @@ public struct QueryFilter: Equatable, Sendable {
         let kinds = head.flatMap { Self.kindWords[words[$0].word] }
         let rest = words.indices.filter { $0 != head && !isCut($0) }
         if let head, kinds != nil,
-           dates != nil || Searcher.terms(rest.map { words[$0].word }.joined(separator: " ")).isEmpty {
+           dates != nil || duplicates || Searcher.terms(rest.map { words[$0].word }.joined(separator: " ")).isEmpty {
             drop(head..<head + 1)
             self.kinds = kinds
         } else {
@@ -63,6 +72,7 @@ public struct QueryFilter: Equatable, Sendable {
         }
         self.text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         self.dates = dates
+        self.duplicates = duplicates
     }
 
     /// The query's words, lowercased, with where each is in it.
@@ -225,6 +235,8 @@ public struct QueryFilter: Equatable, Sendable {
     static let verbs: Set<String> = ["taken", "made", "shot", "recorded", "saved", "downloaded", "created", "modified",
                                      "edited", "changed", "added", "sent", "received", "written"]
     static let determiners: Set<String> = ["my", "all", "the", "any", "some", "every", "show", "find"]
+    static let duplicateWords: Set<String> = ["duplicate", "duplicates", "duplicated", "dupes", "dups", "copies",
+                                              "identical"]
     static let kindWords: [String: Set<FileKind>] = [
         "screenshot": [.screenshot], "screenshots": [.screenshot],
         "photo": [.image], "photos": [.image], "picture": [.image], "pictures": [.image], "pic": [.image],

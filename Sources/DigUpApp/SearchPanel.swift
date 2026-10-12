@@ -46,6 +46,8 @@ final class SearchPanelController {
     private(set) var isCode = false
     /// The query is a search by example ("like: …", `LikeQuery`).
     private(set) var isLike = false
+    /// The query asks for copies ("duplicate photos", `QueryFilter.duplicates`).
+    private(set) var isDuplicates = false
     private(set) var note: String?
     var encoder: EngineStatus.Encoder { model.status.encoder }
 
@@ -174,6 +176,7 @@ final class SearchPanelController {
         typedAt = Date()
         navigated = false
         meaningTask?.cancel()
+        isDuplicates = false
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         // A file dropped into the field leaves its path there: search by it.
         if Self.isFilePath(typed) { return query = LikeQuery.query((typed as NSString).expandingTildeInPath) }
@@ -201,6 +204,7 @@ final class SearchPanelController {
             resizeWindow()
             return
         }
+        if !code, QueryFilter(text).duplicates { return searchDuplicates(text, generation: current) }
         // What the results' words are (the query's without its filter words), and whether it's all filter.
         let (words, listing) = code ? (text, false) : (QueryFilter(text).text, QueryFilter(text).isListing)
         // Words now. The last word is probably half-typed, so it matches as a prefix.
@@ -275,6 +279,31 @@ final class SearchPanelController {
             show(hits, query: "", phase: .meaning)
             log("like \"\((path as NSString).lastPathComponent)\"\(segment == nil ? "" : " (its match)"): "
                 + "\(hits.count) hits (\(results.strongRows.count) strong) in \(ms(since: started))")
+            onFinalResults?()
+        }
+    }
+
+    /// "duplicate photos from 2025", "copies of the lease": sets of copies (`Engine.duplicates`), a group each.
+    private func searchDuplicates(_ text: String, generation current: Int) {
+        isDuplicates = true
+        isCode = false
+        results = .empty
+        selection = nil
+        phase = .words   // "Comparing files…" until they're in
+        resizeWindow()
+        meaningTask = Task {
+            // Every file compared with every other: not for each key typed on the way to "duplicate photos".
+            try? await Task.sleep(for: .milliseconds(400))
+            guard !Task.isCancelled else { return }
+            let started = Date()
+            let sets = await engine.duplicates(text)
+            guard !Task.isCancelled, current == generation else { return }
+            finalGeneration = current
+            results = ResultSet(duplicates: sets)
+            selection = rowIDs.first
+            phase = .meaning
+            resizeWindow()
+            log("duplicates \"\(text)\": \(sets.count) sets in \(ms(since: started))")
             onFinalResults?()
         }
     }

@@ -890,6 +890,28 @@ nonisolated final class Engine: @unchecked Sendable {
         return a.intersection(b)
     }
 
+    /// Sets of copies (`Searcher.duplicates`) among what the query's filter lets through ("duplicate photos from
+    /// 2025"), and when it has words left ("copies of the lease"), among that search's results.
+    func duplicates(_ text: String, kinds: Set<FileKind>? = nil) async -> [[SearchHit]] {
+        let filter = QueryFilter(text)
+        let kinds = Self.both(kinds, filter.kinds)
+        var among: Set<String>?
+        if !Searcher.terms(filter.text).isEmpty {
+            among = Set(await search(text, vector: await embed(text), prefixLast: false, kinds: kinds, limit: 200)
+                .map(\.path))
+        }
+        return await withCheckedContinuation { continuation in
+            searchQueue.async { [self] in
+                let started = Date()
+                let sets = (try? searcher?.duplicates(kinds: kinds, dates: filter.dates, among: among)) ?? []
+                let shown = sets.map(visible).filter { $0.count > 1 }
+                log("duplicates: \(shown.count) sets of \(shown.reduce(0) { $0 + $1.count }) files in "
+                    + ms(since: started))
+                continuation.resume(returning: shown)
+            }
+        }
+    }
+
     /// Only files that are searched (`FolderSelection`'s rule, as the crawler walks them) and of types not skipped: a
     /// removed folder's rows (or a newly skipped type's) can outlive it until a helper syncs (indexing was paused, or
     /// the app quit first).

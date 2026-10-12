@@ -98,7 +98,7 @@ struct ResultRow: Identifiable, Equatable {
     var reason: String {
         guard matchedMeaning else {
             if matchedWords { return "Has your words" }
-            // Listed by the query's filter (`Searcher.listing`): its date.
+            // Listed by the query's filter, or one of a set of copies (`Searcher.listing`, `duplicates`): its date.
             let taken = info["taken"].flatMap(Searcher.taken).map { Date(timeIntervalSince1970: $0) }
             return (taken == nil ? "Changed " : "Taken ")
                 + (taken ?? modified).formatted(date: .abbreviated, time: .omitted)
@@ -212,7 +212,10 @@ struct ResultGroup: Identifiable, Equatable {
     let rows: [ResultRow]
     /// Strong results of this kind, shown or not (the panel shows a few).
     var total: Int
-    var id: ResultGroupKind { kind }
+    /// A set of copies' heading ("2 identical copies · 4.1 MB each"), in place of its kind's.
+    var heading: String? = nil
+    var title: String { heading ?? kind.title }
+    var id: String { heading == nil ? kind.title : rows.first?.id ?? "" }
 }
 
 /// Search results the way they're shown: the strong ones grouped by kind (the best hit's group first, as many rows per
@@ -244,6 +247,19 @@ struct ResultSet: Equatable {
         weaker = hits.dropFirst(strong).map { ResultRow($0, terms: terms) }
     }
 
+    /// Sets of copies (`Engine.duplicates`), a group each.
+    init(duplicates sets: [[SearchHit]]) {
+        groups = sets.map { set in
+            let rows = set.map { ResultRow($0) }
+            let size = set[0].size
+            let heading = set.allSatisfy({ $0.size == size })
+                ? "\(set.count) identical copies · \(bytes(size)) each" : "\(set.count) near-identical files"
+            return ResultGroup(kind: ResultGroupKind(set[0].kind), rows: rows, total: rows.count, heading: heading)
+        }
+        ranked = groups.flatMap(\.rows)
+    }
+
+    var isDuplicates: Bool { groups.contains { $0.heading != nil } }
     var strongRows: [ResultRow] { groups.flatMap(\.rows) }
     var isEmpty: Bool { groups.isEmpty && weaker.isEmpty }
     var count: Int { strongRows.count + weaker.count }
