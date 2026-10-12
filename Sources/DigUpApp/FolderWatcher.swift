@@ -1,17 +1,22 @@
 import CoreServices
+import DigUpKit
 import Foundation
 
 /// File-level FSEvents on the chosen folders. Reports which paths changed (and whether each is a folder), a batch at
 /// a time; the engine debounces and syncs. Costs nothing while nothing changes (no polling), and hidden files
-/// (.DS_Store, editors' temp files) are ignored, since browsing a folder in Finder writes those. `excluding` (up to
+/// (.DS_Store, editors' temp files) are ignored, since browsing a folder in Finder writes those: hidden below a
+/// watched folder, that is (one chosen inside a hidden folder is watched like any other). `excluding` (up to
 /// 8 folders inside `paths`) never reaches the app at all: ~/Library changes many times a second.
 nonisolated final class FolderWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
     private let handler: @Sendable ([(path: String, isFolder: Bool)]) -> Void
+    /// The watched folders as FSEvents reports paths in them (/private/tmp for /tmp).
+    private let roots: [String]
 
     init?(paths: [String], excluding: [String] = [], latency: TimeInterval, queue: DispatchQueue,
           handler: @escaping @Sendable ([(path: String, isFolder: Bool)]) -> Void) {
         self.handler = handler
+        roots = paths.map(FolderSelection.realPath)
         guard !paths.isEmpty else { return nil }
         var context = FSEventStreamContext(version: 0, info: Unmanaged.passUnretained(self).toOpaque(),
                                            retain: nil, release: nil, copyDescription: nil)
@@ -40,7 +45,8 @@ nonisolated final class FolderWatcher: @unchecked Sendable {
 
     fileprivate func received(_ changes: [(path: String, isFolder: Bool)]) {
         let relevant = changes.filter { change in
-            !change.path.split(separator: "/").contains { $0.hasPrefix(".") }
+            let root = roots.first { change.path == $0 || FolderSelection.isInside(change.path, $0) } ?? ""
+            return !change.path.dropFirst(root.count).split(separator: "/").contains { $0.hasPrefix(".") }
         }
         if !relevant.isEmpty { handler(relevant) }
     }
