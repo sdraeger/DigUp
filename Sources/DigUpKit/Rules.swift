@@ -106,6 +106,10 @@ public enum Rules {
 
     /// MPEG-TS packets start with 0x47 every 188 bytes (or every 192 with a 4-byte timecode, as in .m2ts / AVCHD .mts).
     static func isMPEGTransportStream(_ url: URL) -> Bool {
+        // Reading a dataless placeholder (an iCloud file not downloaded) downloads it: call it video, which the crawl
+        // then skips as in the cloud.
+        var info = stat()
+        if lstat(url.path, &info) == 0, info.st_flags & 0x4000_0000 != 0 { return true }   // SF_DATALESS
         guard let handle = try? FileHandle(forReadingFrom: url) else { return false }
         defer { try? handle.close() }
         guard let data = try? handle.read(upToCount: 600), data.count >= 400 else { return false }
