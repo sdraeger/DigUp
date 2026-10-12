@@ -48,8 +48,8 @@ import Testing
     }
 
     @Test func foldersCountUnlessSkipped() {
-        let folders: Set = ["Moved in", "node_modules", "proj/src"]
-        #expect(kept(["Moved in", "node_modules", "proj/src"], folders: folders) == ["Moved in", "proj/src"])
+        let folders: Set = ["Moved in", "node_modules", "proj/src", "proj"]
+        #expect(kept(["Moved in", "node_modules", "proj/src", "proj"], folders: folders) == ["Moved in", "proj"])
     }
 
     @Test func changesOutsideTheRootsAreKept() {

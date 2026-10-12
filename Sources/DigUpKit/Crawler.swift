@@ -170,7 +170,8 @@ extension Crawler {
     /// its own rules: none in or under a folder it doesn't walk into (hidden, an app or bundle, `Rules.skipReason`'s:
     /// ~/Library, developer and .noindex folders, excluded ones), none to a file it never indexes (`Rules.classify`),
     /// and inside a code project only pictures (it keeps screenshots there, and a removed one looks like any picture).
-    /// A folder counts unless it's skipped: one moved in brings its files. Not the code index's rules.
+    /// A folder counts unless it's skipped or inside a code project (builds come and go there): one moved in brings its
+    /// files. Not the code index's rules.
     public static func relevant(_ changes: [(path: String, isFolder: Bool)], roots: [String],
                                 options: IndexOptions) -> [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -208,7 +209,7 @@ extension Crawler {
                 folder = (folder as NSString).deletingLastPathComponent
             }
             guard folders.allSatisfy({ isWalked($0, walk) }) else { return false }
-            if change.isFolder { return true }
+            if change.isFolder { return !([walk.root] + folders.dropFirst()).contains(where: isProject) }
             let url = URL(fileURLWithPath: change.path)
             guard !url.lastPathComponent.hasPrefix("."),
                   case .index(let kind) = Rules.classify(byName: url, options: options) else { return false }
