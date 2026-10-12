@@ -147,7 +147,10 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // encoderQueue only
     private var encoder: EmbeddingWorker?
-    private var encoderFailed = false
+    /// When the encoder last failed to start or to embed: it isn't tried again for `encoderRetrySeconds`, so a model
+    /// that can't load isn't reloaded on every keystroke.
+    private var encoderFailedAt: Date?
+    private let encoderRetrySeconds: Double = 30
     private var encoderIdleExit: DispatchWorkItem?
     private var vectorCache = QueryVectorCache(limit: 256)
 
@@ -290,7 +293,7 @@ nonisolated final class Engine: @unchecked Sendable {
     /// The model has finished downloading: index what's waiting, and meaning search may start.
     func modelArrived() {
         update { $0.waitingForModel = false }
-        encoderQueue.async { [self] in encoderFailed = false }
+        encoderQueue.async { [self] in encoderFailedAt = nil }
         indexQueue.async { [self] in requestSync() }
     }
 
@@ -928,7 +931,6 @@ nonisolated final class Engine: @unchecked Sendable {
     /// in parallel, so both are usually done by the time you've typed a few words.
     func prewarm() {
         encoderQueue.async { [self] in
-            encoderFailed = false   // opening the panel is a fresh chance
             if runningEncoder() != nil { scheduleIdleExit() }
         }
         searchQueue.async { [self] in
@@ -984,14 +986,15 @@ nonisolated final class Engine: @unchecked Sendable {
             return vector
         } catch {
             log("encoder: \(error)")
-            stopEncoder()   // the next query starts a new one
+            stopEncoder()
+            encoderFailedAt = Date()
             return nil
         }
     }
 
     private func runningEncoder() -> EmbeddingWorker? {
         if let encoder { return encoder }
-        guard !encoderFailed else { return nil }
+        guard encoderFailedAt.map({ Date().timeIntervalSince($0) > encoderRetrySeconds }) ?? true else { return nil }
         let python = try? WorkerConfig.fromEnvironment()
         // Still downloading: no meaning search yet, which isn't a failure.
         guard python != nil || FileManager.default.fileExists(
@@ -1010,7 +1013,7 @@ nonisolated final class Engine: @unchecked Sendable {
             update { $0.encoder = .ready }
             return worker
         } catch {
-            encoderFailed = true
+            encoderFailedAt = Date()
             log("encoder: can't start: \(error)")
             update { $0.encoder = .unavailable }
             return nil
