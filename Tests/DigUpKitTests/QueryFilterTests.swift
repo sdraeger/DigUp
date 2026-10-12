@@ -58,6 +58,22 @@ import Testing
         #expect(filter("from yesterday").isListing && filter("from yesterday").kinds == nil)
     }
 
+    @Test func whatItsNotAbout() {
+        let papers = filter("pdfs from 2026 that are not academic")
+        #expect(papers.excluded == "academic" && papers.kinds == [.pdf] && papers.isListing)
+        #expect(papers.dates?.start == day(2026, 1, 1))
+        #expect(filter("photos of the beach without people").excluded == "people")
+        #expect(filter("photos of the beach without people").text == "photos of the beach")
+        #expect(filter("documents that aren't receipts from 2025").excluded == "receipts")
+        #expect(filter("documents that aren't receipts from 2025").dates?.start == day(2025, 1, 1))
+        #expect(filter("notes but not work").excluded == "work")
+        #expect(filter("notes other than work").excluded == "work")
+        #expect(filter("non fiction books").excluded == "fiction" && filter("non fiction books").text == "books")
+        for query in ["error not found", "not a bug", "knot tying"] {
+            #expect(filter(query).excluded == nil && filter(query).text == query, "\(query)")
+        }
+    }
+
     @Test func duplicates() {
         let photos = filter("duplicate photos")
         #expect(photos.duplicates && photos.kinds == [.image] && photos.text.isEmpty && !photos.isListing)
@@ -136,5 +152,10 @@ import Testing
                          ["/x/beach.jpg", "/x/beach small.jpg", "/x/Screenshot beach.png"]])
         #expect(try searcher.duplicates(kinds: [.pdf], dates: nil).count == 1)
         #expect(try searcher.duplicates(kinds: nil, dates: nil, among: ["/x/beach.jpg", "/x/forest.jpg"]).isEmpty)
+
+        // What a "not …" asks about: the files above average for the words, best first, of those given.
+        let above = try searcher.aboveAverage(for: vector(3), among: ["/x/lease.pdf", "/x/lease.png", "/x/forest.jpg"])
+        #expect(Set(above.prefix(2).map(\.path)) == ["/x/lease.pdf", "/x/lease.png"] && above.allSatisfy { $0.z > 0 })
+        #expect(!above.contains { $0.path == "/x/lease copy.pdf" })   // not among those given
     }
 }

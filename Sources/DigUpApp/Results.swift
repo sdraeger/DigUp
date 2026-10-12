@@ -292,7 +292,8 @@ extension FileKind {
 }
 
 extension QueryFilter {
-    /// What the query's filter keeps, for a status line: "PDFs · Mar 1 – 31, 2026", "Images · Since Sep 1, 2026".
+    /// What the query's filter keeps, for a status line: "PDFs · Mar 1 – 31, 2026", "Images · Since Sep 1, 2026",
+    /// "Documents · not academic".
     var summary: String? {
         var parts: [String] = []
         if let kinds {
@@ -308,6 +309,7 @@ extension QueryFilter {
                          : abs(dates.end.timeIntervalSinceNow) < 5 ? "Since \(day(dates.start))"
                          : formatter.string(from: dates.start, to: dates.end.addingTimeInterval(-1)))
         }
+        if let excluded { parts.append("not \(excluded)") }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

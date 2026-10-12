@@ -552,6 +552,37 @@ public final class Searcher {
         return text
     }
 
+    /// What a query's "not …" is worth asking about (`QueryFilter.excluded`), of `paths`: the files whose best part
+    /// stands out for `vector` above the average file (z > 0), best first, with that part and its z. On a mixed set of
+    /// 58 files (2026-10-11), every PDF about a word scored above average for it, and the others mostly below: for
+    /// "academic", five journal articles at 0.42 to 1.80, an invoice at 0.25, the rest -0.60 and lower. Asked about
+    /// were 5 to 10 of the 19 PDFs, depending on the word.
+    public func aboveAverage(for vector: [Float], among paths: Set<String>) throws
+        -> [(path: String, segment: Int64, z: Double)] {
+        if !vectorsLoaded { try reload() }
+        guard vector.count == Vectors.dimension, !rowFile.isEmpty else { return [] }
+        var pathOf: [Int64: String] = [:]
+        for path in paths {
+            try store.db.query("SELECT id FROM files WHERE path = ?", [.text(path)]) { pathOf[$0.int(0)] = path }
+        }
+        let meaning = Self.meaning(score(vector), rowModality, setsScale: rowSetsScale)
+        var best: [Int64: (z: Double, row: Int)] = [:]
+        for row in meaning.indices where pathOf[rowFile[row]] != nil && meaning[row] > (best[rowFile[row]]?.z ?? 0) {
+            best[rowFile[row]] = (meaning[row], row)
+        }
+        return best.sorted { $0.value.z > $1.value.z }.map { (pathOf[$0.key]!, rowSegment[$0.value.row], $0.value.z) }
+    }
+
+    /// How the file of `segment` begins: its first text (a paper's title, authors and journal).
+    public func opening(ofFileWith segment: Int64) throws -> String? {
+        var text: String?
+        try store.db.query("""
+            SELECT coalesce(fts.original, fts.body) FROM fts JOIN segments s ON s.id = fts.rowid
+            WHERE s.file = (SELECT file FROM segments WHERE id = ?) AND s.kind != 'name' ORDER BY s.id LIMIT 1
+            """, [.int(segment)]) { text = $0.text(0) }
+        return text
+    }
+
     /// A question's passage (`Question`): the text of `segment` (a page, a passage, a screenshot's words), else its
     /// file's text at the same place (a scanned page's), else its file's first (the words in a screenshot whose picture
     /// matched). Nil for a file with none.

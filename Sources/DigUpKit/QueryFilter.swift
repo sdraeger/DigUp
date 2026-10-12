@@ -13,6 +13,23 @@ public struct QueryFilter: Equatable, Sendable {
     public var dates: DateInterval?
     /// "duplicate photos", "copies of the lease": files that are copies of each other (`Searcher.duplicates`).
     public var duplicates = false
+    /// What the files mustn't be about ("pdfs that are not academic": "academic"), left out by meaning
+    /// (`Searcher.standingOut`): a vector can't say "not".
+    public var excluded: String?
+
+    /// What Apple's on-device model is asked about each file a "not …" might leave out (`Engine.leaveOut`): one file
+    /// at a time, as a question. On 19 PDFs (2026-10-11), picking them from a list it called a lease academic and
+    /// papers music, and asked whether "academic" fit a file it missed a Nature article; asked "Is this file
+    /// academic?", it caught all five articles, and called no file music or invoices but the two invoices.
+    public static let fitInstructions = """
+        You sort someone's files. Given one file (its name, how its text begins and a part of it), answer the \
+        question about it.
+        """
+
+    public static func fitPrompt(_ description: String, name: String, text: String) -> String {
+        let text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ").prefix(520)
+        return "File: \(name)\n\(text)\n\nQuestion: Is this file \(description)?"
+    }
 
     /// Nothing left to search for: what the filter lets through, newest first (`Searcher.listing`).
     public var isListing: Bool { !duplicates && (kinds != nil || dates != nil) && Searcher.terms(text).isEmpty }
@@ -52,8 +69,30 @@ public struct QueryFilter: Equatable, Sendable {
             }
             start += 1
         }
-        // A kind word up front ("my", "all", "the" before it don't count).
         let isCut = { (index: Int) in cut.contains { $0.contains(words[index].range.lowerBound) } }
+        // What it's not about, to the end of the query (or its date): "that are not academic", "but not receipts",
+        // "without people", "except screenshots", "other than work", "non fiction". A plain "not" counts only after
+        // "is", "are", "but"…: "error not found" is what's searched for.
+        var excluded: String?
+        for index in words.indices where excluded == nil && !isCut(index) && index + 1 < words.count {
+            let previous = index > 0 ? words[index - 1].word : ""
+            var from = index
+            switch words[index].word {
+            case "without", "except", "excluding", "non": break
+            case "not" where ["but", "and"].contains(previous): from = index - 1
+            case "not" where Self.linking.contains(previous), "t" where Self.contracted.contains(previous):
+                from = index - 1
+                if from > 0, ["that", "which", "who"].contains(words[from - 1].word) { from -= 1 }
+            case "than" where previous == "other": from = index - 1
+            default: continue
+            }
+            var last = index + 1
+            while words[index].word != "non", last + 1 < words.count, !isCut(last + 1) { last += 1 }
+            guard !isCut(index + 1) else { continue }
+            excluded = String(query[words[index + 1].range.lowerBound..<words[last].range.upperBound])
+            drop(from..<last + 1)
+        }
+        // A kind word up front ("my", "all", "the" before it don't count).
         let head = words.indices.first { !Self.determiners.contains(words[$0].word) && !isCut($0) }
         let kinds = head.flatMap { Self.kindWords[words[$0].word] }
         let rest = words.indices.filter { $0 != head && !isCut($0) }
@@ -73,6 +112,7 @@ public struct QueryFilter: Equatable, Sendable {
         self.text = text.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         self.dates = dates
         self.duplicates = duplicates
+        self.excluded = excluded
     }
 
     /// The query's words, lowercased, with where each is in it.
@@ -234,6 +274,9 @@ public struct QueryFilter: Equatable, Sendable {
     static let prepositions: Set<String> = ["from", "in", "during", "on", "since", "before", "after"]
     static let verbs: Set<String> = ["taken", "made", "shot", "recorded", "saved", "downloaded", "created", "modified",
                                      "edited", "changed", "added", "sent", "received", "written"]
+    static let linking: Set<String> = ["is", "are", "was", "were", "be"]
+    /// "aren't" and the like, as `words` splits them ("aren", "t").
+    static let contracted: Set<String> = ["aren", "isn", "wasn", "weren", "don", "doesn"]
     static let determiners: Set<String> = ["my", "all", "the", "any", "some", "every", "show", "find"]
     static let duplicateWords: Set<String> = ["duplicate", "duplicates", "duplicated", "dupes", "dups", "copies",
                                               "identical"]

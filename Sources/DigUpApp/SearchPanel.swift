@@ -226,7 +226,7 @@ final class SearchPanelController {
         // Words now. The last word is probably half-typed, so it matches as a prefix.
         Task {
             let started = Date()
-            let hits = await engine.search(text, vector: nil, prefixLast: true, code: code)
+            let hits = await engine.search(text, vector: nil, prefixLast: true, code: code, leavingOut: false)
             guard current == generation, finalGeneration != current else { return }
             show(hits, query: words, phase: .words)
             log("search \"\(typed)\": words \(hits.count) hits in \(ms(since: started))")
@@ -382,7 +382,13 @@ final class SearchPanelController {
     }
 
     /// What the query's own filter words keep ("PDFs · Mar 1 – 31, 2026"), for the status line.
-    var filterSummary: String? { isCode || isLike ? nil : QueryFilter(query).summary }
+    var filterSummary: String? {
+        guard !isCode, !isLike else { return nil }
+        let filter = QueryFilter(query)
+        // Without the model, a "not …" leaves out only pictures and recordings.
+        let unanswered = filter.excluded != nil && Answering.unavailable != nil
+        return filter.summary.map { $0 + (unanswered ? " (documents need Apple Intelligence)" : "") }
+    }
 
     /// ⌘S: keeps this search and says when new files match it (`SavedSearches.swift`); again, forgets it.
     func toggleSave() {

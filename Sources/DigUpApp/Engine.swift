@@ -860,13 +860,17 @@ nonisolated final class Engine: @unchecked Sendable {
     /// unplugged) are left out.
     /// `code`: the code index (its own folders), never anything else.
     /// The query's own filter words (`QueryFilter`: "PDFs from March about the lease") narrow it, and a query that's
-    /// all filter ("photos from last summer") lists what it lets through, newest first.
+    /// all filter ("photos from last summer") lists what it lets through, newest first. Its "not …" leaves files out
+    /// (`leaveOut`), unless `leavingOut` is false (results while typing: it takes a few seconds).
     func search(_ text: String, vector: QueryVector?, prefixLast: Bool, kinds: Set<FileKind>? = nil,
-                limit: Int = 40, code: Bool = false) async -> [SearchHit] {
+                limit: Int = 40, code: Bool = false, leavingOut: Bool = true) async -> [SearchHit] {
         if code { return await searchCode(text, vector: vector, prefixLast: prefixLast, limit: limit) }
         let filter = QueryFilter(text)
         let kinds = Self.both(kinds, filter.kinds)
-        return await withCheckedContinuation { continuation in
+        let excluded = leavingOut ? filter.excluded : nil
+        // Room for the ones left out.
+        let limit = excluded == nil ? limit : limit + Self.mostAsked
+        let hits = await withCheckedContinuation { continuation in
             searchQueue.async { [self] in
                 var values = vector?.values
                 if let vector, let indexed = searcher?.vectorSource, indexed != vector.source {
@@ -882,6 +886,57 @@ nonisolated final class Engine: @unchecked Sendable {
                 continuation.resume(returning: visible(hits ?? []))
             }
         }
+        guard let excluded else { return hits }
+        return Array(await leaveOut(hits, notAbout: excluded).prefix(limit - Self.mostAsked))
+    }
+
+    /// Files asked about at most for one "not …" (about a third of a second each).
+    static let mostAsked = 24
+
+    /// What a query's "not …" said yes about, by its words and a file's path: asking again while you type on is slow.
+    private var fitting: [String: Bool] = [:]
+
+    /// A query's "not …" (`QueryFilter.excluded`: "pdfs that are not academic"): the hits it's about, left out. A
+    /// vector can't say "not", and how far the files about a word stand out depends on what else is indexed, so meaning
+    /// only picks the hits worth asking about (`Searcher.aboveAverage`), and Apple's on-device model says from each
+    /// one's name, how it begins and its part most like the words whether they fit. A file with no text (a photo, a
+    /// recording) goes when a search for the words would find it. Without the model, only those go.
+    private func leaveOut(_ hits: [SearchHit], notAbout words: String) async -> [SearchHit] {
+        guard !hits.isEmpty, let vector = await embed(words) else { return hits }
+        let started = Date()
+        let candidates: [(path: String, z: Double, text: String?)] = await withCheckedContinuation { continuation in
+            searchQueue.async { [self] in
+                guard let searcher, searcher.vectorSource == vector.source,
+                      let above = try? searcher.aboveAverage(for: vector.values, among: Set(hits.map(\.path)))
+                else { return continuation.resume(returning: []) }
+                // How it begins (a paper's title and journal) and its part most like the words.
+                continuation.resume(returning: above.prefix(Self.mostAsked).map { found in
+                    let opening = ((try? searcher.opening(ofFileWith: found.segment)) ?? nil)
+                        .map { String($0.prefix(200)) }
+                    let part = ((try? searcher.passage(near: found.segment)) ?? nil).map { String($0.prefix(300)) }
+                    let text = [opening, part == opening ? nil : part].compactMap { $0 }.joined(separator: " … ")
+                    return (found.path, found.z, text.isEmpty ? nil : text)
+                })
+            }
+        }
+        var out = Set<String>()
+        for file in candidates {
+            guard let text = file.text, !text.isEmpty else {
+                if file.z >= 2 { out.insert(file.path) }   // as a search's meaning matches
+                continue
+            }
+            let key = words.lowercased() + "\u{0}" + file.path
+            var fits = lock.withLock { fitting[key] }
+            if fits == nil {
+                fits = await Answering.fits(words, name: (file.path as NSString).lastPathComponent, text: text)
+                if let fits { lock.withLock { fitting[key] = fits } }
+            }
+            if fits == true { out.insert(file.path) }
+        }
+        log("not \"\(words)\": \(out.count) of \(candidates.count) asked about left out in \(ms(since: started)) ("
+            + candidates.map { (out.contains($0.path) ? "-" : "+") + ($0.path as NSString).lastPathComponent }
+                .joined(separator: ", ") + ")")
+        return hits.filter { !out.contains($0.path) }
     }
 
     /// A question's sources (`Question`): the passages of its best results, up to `Question.maxSources`, skipping

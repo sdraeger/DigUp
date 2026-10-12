@@ -49,6 +49,19 @@ enum Answering {
         }
     }
 
+    /// Whether `description` fits a file, from its name and a part of its text (a query's "not …",
+    /// `QueryFilter.excluded`). Nil when the model can't say.
+    static func fits(_ description: String, name: String, text: String) async -> Bool? {
+        #if canImport(FoundationModels)
+        if #available(macOS 26.0, *), unavailable == nil {
+            let session = LanguageModelSession(instructions: QueryFilter.fitInstructions)
+            let prompt = QueryFilter.fitPrompt(description, name: name, text: text)
+            return try? await session.respond(to: prompt, generating: Verdict.self).content.fits
+        }
+        #endif
+        return nil
+    }
+
     /// What went wrong, said plainly.
     static func problem(_ error: Error) -> String {
         #if canImport(FoundationModels)
@@ -64,3 +77,12 @@ enum Answering {
         return "Couldn't answer: \(error.localizedDescription)"
     }
 }
+
+#if canImport(FoundationModels)
+@available(macOS 26.0, *)
+@Generable
+struct Verdict {
+    @Guide(description: "Whether the description fits the file")
+    var fits: Bool
+}
+#endif

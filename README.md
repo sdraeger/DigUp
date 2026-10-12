@@ -39,6 +39,9 @@ whatever kind of file it is. All of it happens on your Mac.
   Apple's on-device model (macOS 26 with Apple Intelligence; it stays on your Mac)
 - a part of the screen is a search too: press ⌘R in the panel, pick it, and get the files most like it (a chart finds
   the report it came from)
+- "not" works too: "pdfs from 2026 that are not academic", "photos without people". A picture or a recording is
+  left out when a search for those words would find it; a document, when Apple's on-device model, asked about it,
+  says the words fit (macOS 26 with Apple Intelligence)
 - "duplicate photos" or "copies of the lease" finds copies: the same file twice, a resized or re-saved picture, a
   re-exported PDF. DigUp only shows them; it never deletes anything
 
