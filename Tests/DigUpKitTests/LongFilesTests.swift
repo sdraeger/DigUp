@@ -73,6 +73,38 @@ import Testing
         #expect(try found(app, "otters").count == 6)
     }
 
+    /// A run that crashed going carefully left the file it was on in its marker (`Indexer.recoverFromCrash`): the next
+    /// run sets that file aside and reads the rest, and leaves no marker behind.
+    @Test func theFileACrashedRunWasOnIsSetAside() throws {
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        for name in ["a", "b", "c"] {
+            try "Notes \(name) about otters.".write(to: files.appendingPathComponent("\(name).txt"), atomically: true,
+                                                   encoding: .utf8)
+        }
+        let store = try store()
+        let indexer = try indexer(store, FakeEmbedder())
+        _ = try indexer.sync([files])
+        let culprit = try store.pending(limit: nil).first { $0.path.hasSuffix("b.txt") }!
+        try "99999999 \(culprit.id):doc:".write(to: indexer.inflight, atomically: true, encoding: .utf8)
+        let states = try indexer.run()
+        #expect(states == ["done": 2])
+        #expect(try state(store, culprit.path).state == "failed")
+        #expect(!FileManager.default.fileExists(atPath: indexer.inflight.path))
+    }
+
+    @Test func aLongFileACrashedRunWasOnKeepsWhatItRead() throws {
+        let pdf = try makePDF("Book.pdf", pages: 100)
+        let store = try store()
+        let indexer = try indexer(store, FakeEmbedder())
+        _ = try indexer.sync([files])
+        try indexer.run()   // pages 1–30
+        let id = try store.unfinished()[0].id
+        try "99999999 \(id):pdf:30".write(to: indexer.inflight, atomically: true, encoding: .utf8)
+        try indexer.finishLongFiles()
+        #expect(try places(store, pdf.path) == Array(1...30))
+        #expect(try state(store, pdf.path).state == "done")
+    }
+
     /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
     /// deleted would embed every file again once access is back.
     @Test func anUnreadableFolderKeepsItsFiles() throws {

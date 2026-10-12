@@ -226,10 +226,21 @@ public final class Indexer {
     /// job is through (other connections see it within the second). A stop, or an error before a job writes (the
     /// model died), saves what's through. A database error in a job's writes can't be undone for that job alone: the
     /// group goes (its files wait for the next run) and the job's files are marked failed, so they aren't retried
-    /// in a loop. A crash loses at most that second, which the next run does again.
+    /// in a loop. A crash loses at most that second, which the next run does again; a file that crashes the indexer
+    /// itself is found and set aside (`recoverFromCrash`).
     private func process(_ jobs: [Job], shouldStop: () -> Bool,
                          committed: (Int, Job, [(String, String?)], Double) -> Void,
                          skip: (Job) -> Bool = { _ in false }) throws {
+        let (careful, setAside) = recoverFromCrash()
+        defer { try? FileManager.default.removeItem(at: inflight) }
+        // Without the files just set aside. Going carefully: a file at a time (an image batch split up), so the one on
+        // the marker is the one.
+        let jobs: [(index: Int, job: Job)] = jobs.enumerated().flatMap { index, job in
+            let files = job.files.filter { !setAside.contains($0.id) }
+            if files.isEmpty { return [(index: Int, job: Job)]() }
+            return index < careful ? files.map { (index, Job(files: [$0], step: job.step)) }
+                : [(index, Job(files: files, step: job.step))]
+        }
         var ahead: PendingBatch?
         var groupStarted: Date?
         func save() throws {
@@ -246,11 +257,14 @@ public final class Indexer {
             }
             try? save()   // what was done before an error or a stop
         }
-        for (index, job) in jobs.enumerated() {
+        for (position, (index, job)) in jobs.enumerated() {
             guard !shouldStop() else { break }
+            let carefully = index < careful
+            if carefully { markInflight(job) }
             let started = Date()
             let prepared = (ahead ?? prepare(job)).wait()
-            ahead = index + 1 < jobs.count ? prepare(jobs[index + 1]) : nil
+            // Read ahead while this one embeds, except while going carefully (a crash there would be blamed on this).
+            ahead = !carefully && position + 1 < jobs.count ? prepare(jobs[position + 1].job) : nil
             defer { try? FileManager.default.removeItem(at: prepared.folder) }
             guard !skip(job) else { continue }
             if groupStarted == nil {
@@ -274,7 +288,12 @@ public final class Indexer {
             let seconds = Date().timeIntervalSince(started)
             if modelWasRunning { measure(prepared, seconds: seconds) }   // else it's seconds of the model starting
             committed(index, job, results, seconds / Double(job.files.count))
-            if let groupStarted, Date().timeIntervalSince(groupStarted) >= 1 { try save() }
+            if carefully {
+                try save()
+                markInflight(nil)
+            } else if let groupStarted, Date().timeIntervalSince(groupStarted) >= 1 {
+                try save()
+            }
         }
         try save()
     }
@@ -295,6 +314,63 @@ public final class Indexer {
         case .code(let file): measured.add("codeStretch", units: Double(file.pieces.count), seconds: seconds)
         case .nothing: break
         }
+    }
+
+    // MARK: Crashes
+
+    /// A file that crashes the indexer (a decoder or the model on bad data) stayed pending and crashed every run after
+    /// it, and the files behind it were never read. `inflight` says a run is under way, and is removed when it ends.
+    /// Left behind by a process that's gone, the run before crashed: this one goes carefully for its first
+    /// `carefulJobs` jobs, a file at a time, each saved alone with the file it's on written down first. A crash there
+    /// leaves that file on the marker, and the next run sets it aside (`failed`, tried again once it changes; a long
+    /// file keeps what it read). Normal runs write the marker twice a run, not per file.
+    static let carefulJobs = 256
+
+    /// `<index file>-inflight`: the running process, then the files it's on while going carefully ("id:kind:step").
+    var inflight: URL { URL(fileURLWithPath: store.file.path + "-inflight") }
+
+    /// Sets aside the files a crashed run was on (their ids), and says how many jobs this run goes carefully for.
+    private func recoverFromCrash() -> (careful: Int, setAside: Set<Int64>) {
+        defer { markInflight(nil) }
+        guard let left = try? String(contentsOf: inflight, encoding: .utf8) else { return (0, []) }
+        let words = left.split(separator: " ")
+        // Another process indexing this index (the CLI beside the app) isn't a crash.
+        guard let pid = words.first.flatMap({ Int32($0) }), pid != ProcessInfo.processInfo.processIdentifier,
+              Self.isGone(pid) else {
+            return (0, [])
+        }
+        var setAside = Set<Int64>()
+        for word in words.dropFirst() {
+            let parts = word.split(separator: ":", omittingEmptySubsequences: false)
+            guard parts.count == 3, let id = Int64(parts[0]), let kind = FileKind(rawValue: String(parts[1])) else {
+                continue
+            }
+            if let place = Int(parts[2]) {
+                _ = try? stopReading(id, kind: kind, at: place, because: "it crashed the indexer")
+            } else {
+                try? store.finish(id, state: "failed", detail: "it crashed the indexer")
+            }
+            setAside.insert(id)
+        }
+        return (Self.carefulJobs, setAside)
+    }
+
+    /// Writes down this process and, going carefully, the job it's about to read (a plain write: a crash of this
+    /// process doesn't lose it).
+    private func markInflight(_ job: Job?) {
+        let step = job?.step.map { "\($0.lowerBound)" } ?? ""
+        let files = job?.files.map { "\($0.id):\($0.kind.rawValue):\(step)" } ?? []
+        try? ([String(ProcessInfo.processInfo.processIdentifier)] + files).joined(separator: " ")
+            .write(to: inflight, atomically: false, encoding: .utf8)
+    }
+
+    /// Whether process `pid` has ended.
+    private static func isGone(_ pid: Int32) -> Bool {
+        #if os(Windows)
+        return false   // shortcut: no crash is noticed on Windows; ask with OpenProcess once DigUp indexes there
+        #else
+        return kill(pid, 0) != 0 && errno == ESRCH
+        #endif
     }
 
     /// Files read and embedded together (images 8 at a time, other files one by one), or one step of a long file
@@ -519,7 +595,8 @@ public final class Indexer {
         let batch = prepared.batch
         let later = prepared.step != nil
         if let step = prepared.step, let outcome = prepared.outcomes[0] {
-            return [try stopReading(batch[0], at: step.lowerBound, because: outcome.detail ?? outcome.state)]
+            return [try stopReading(batch[0].id, kind: batch[0].kind, at: step.lowerBound,
+                                     because: outcome.detail ?? outcome.state)]
         }
         var results = [(String, String?)](repeating: ("failed", nil), count: batch.count)
         for (slot, outcome) in prepared.outcomes {
@@ -551,7 +628,9 @@ public final class Indexer {
         } catch let error as Database.Failure {
             throw error   // its writes so far can't be undone here (`process`)
         } catch {
-            if let step = prepared.step { return [try stopReading(batch[0], at: step.lowerBound, because: "\(error)")] }
+            if let step = prepared.step {
+                return [try stopReading(batch[0].id, kind: batch[0].kind, at: step.lowerBound, because: "\(error)")]
+            }
             for (slot, file) in batch.enumerated() where prepared.outcomes[slot] == nil {
                 try store.finish(file.id, state: "failed", detail: "\(error)")
                 results[slot] = ("failed", "\(error)")
@@ -562,12 +641,13 @@ public final class Indexer {
 
     /// A long file that can't be read any further: it keeps the pages or chunks read so far, which stay searchable,
     /// and counts as done rather than failed or waiting to be tried again and again.
-    private func stopReading(_ file: FileRecord, at place: Int, because problem: String) throws -> (String, String?) {
-        var info = try store.info(of: file.id)
+    private func stopReading(_ id: Int64, kind: FileKind, at place: Int, because problem: String) throws
+        -> (String, String?) {
+        var info = try store.info(of: id)
         info["read_to"] = nil
         info["read_end"] = nil
-        let unit = file.kind == .pdf ? "page" : "chunk"
-        try store.finish(file.id, state: "done", detail: "read to \(unit) \(place), not after: \(problem)", info: info)
+        let unit = kind == .pdf ? "page" : "chunk"
+        try store.finish(id, state: "done", detail: "read to \(unit) \(place), not after: \(problem)", info: info)
         return ("done", "stopped before \(unit) \(place + 1): \(problem)")
     }
 
