@@ -120,6 +120,19 @@ import Testing
         #expect(again.added == 0 && again.removed == 0 && again.unchanged == 1)
     }
 
+    /// A screenshot told by its name stays one when renamed: not embedded again as a picture.
+    @Test func aRenamedScreenshotIsNotEmbeddedAgain() throws {
+        try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
+        let shot = files.appendingPathComponent("Screenshot 2026-10-11 at 10.00.00.png")
+        try Data(repeating: 0, count: 100).write(to: shot)
+        let indexer = try indexer(try store(), FakeEmbedder())
+        #expect(try indexer.sync([files]).added == 1)
+        try FileManager.default.moveItem(at: shot, to: files.appendingPathComponent("error dialog.png"))
+        #expect(try indexer.sync([files]).moved == 1)
+        let again = try indexer.sync([files])
+        #expect(again.changed == 0 && again.unchanged == 1)
+    }
+
     /// A folder the walk can't read (macOS hasn't granted access yet, or took it back) keeps its rows: taking them for
     /// deleted would embed every file again once access is back.
     @Test func anUnreadableFolderKeepsItsFiles() throws {

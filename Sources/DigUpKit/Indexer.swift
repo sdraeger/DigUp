@@ -104,7 +104,11 @@ public final class Indexer {
         try store.db.transaction {
             for file in crawl.candidates {
                 if let row = byPath[file.path] {
-                    if row.size != file.size || abs(row.mtime - file.mtime) > 0.001 || row.kind != file.kind {
+                    // Screenshot or picture is told partly by the name: renaming one doesn't make it another file.
+                    let pictures: Set<FileKind> = [.screenshot, .image]
+                    let kindChanged = row.kind != file.kind
+                        && !(pictures.contains(row.kind) && pictures.contains(file.kind))
+                    if row.size != file.size || abs(row.mtime - file.mtime) > 0.001 || kindChanged {
                         try store.requeue(row.id, as: file)
                         summary.changed += 1
                         summary.queued.append(row.id)
