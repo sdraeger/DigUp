@@ -9,8 +9,8 @@ import Observation
 ///   (an HTTP range), after a relaunch too.
 /// - Checked: a finished file must have the exact size and SHA-256 in `ModelFiles` before it gets its real name, so a
 ///   file under its real name is always whole.
-/// - Network problems retry by themselves (2 s, 5 s, 15 s, then every 30 s). A full disk, or a file that fails its
-///   check twice, waits for the user (`start()` again).
+/// - Network problems retry by themselves (2 s, 5 s, 15 s, then from 30 s, doubling up to 30 min). A full disk, or a
+///   file that fails its check twice, waits for the user (`start()` again).
 /// - The folder is excluded from Time Machine: the files can always be downloaded again.
 ///
 /// This is the app's only network use. It starts when onboarding's Get Started is clicked, or at launch when a set-up
@@ -89,6 +89,7 @@ final class ModelDownload {
         }
         guard fetcher == nil else { return }   // one download at a time: two would write the same .partial
         retryWork?.cancel()
+        failuresInARow = 0
         failedChecks = 0
         next()
     }
@@ -191,6 +192,7 @@ final class ModelDownload {
         fetcher = nil
         switch outcome {
         case .downloaded(let partial):
+            failuresInARow = 0
             let seconds = Date().timeIntervalSince(fileStarted)
             phase = .verifying
             let started = Date()
@@ -234,8 +236,9 @@ final class ModelDownload {
                 log("model: stopped: \(message)")
                 return
             }
-            let delays: [Double] = [2, 5, 15, 30]
-            let delay = delays[min(failuresInARow, delays.count - 1)]
+            // An outage of hours shouldn't mean a try (and a log line) every 30 s.
+            let delay: Double = failuresInARow < 3 ? [2, 5, 15][failuresInARow]
+                : min(30 * pow(2, Double(failuresInARow - 3)), 1800)
             failuresInARow += 1
             phase = .retrying(message)
             log("model: \(message.trimmingCharacters(in: CharacterSet(charactersIn: "."))); trying again in \(Int(delay)) s")

@@ -23,6 +23,8 @@ public final class FileFetcher: NSObject, URLSessionDataDelegate, @unchecked Sen
     private var handle: FileHandle?
     private var written: Int64 = 0
     private var problem: (message: String, retry: Bool)?
+    private let cancelLock = NSLock()
+    private var cancelled = false   // under `cancelLock`: `cancel()` was asked for
     private var reported = Date.distantPast
 
     public init(file: ModelFiles.File, folder: URL, progress: @escaping @Sendable (Int64) -> Void,
@@ -64,6 +66,7 @@ public final class FileFetcher: NSObject, URLSessionDataDelegate, @unchecked Sen
     }
 
     public func cancel() {
+        cancelLock.withLock { cancelled = true }
         session?.invalidateAndCancel()
     }
 
@@ -138,7 +141,8 @@ public final class FileFetcher: NSObject, URLSessionDataDelegate, @unchecked Sen
         if let problem {
             done(.failed(problem.message, retry: problem.retry))
         } else if let error {
-            if (error as NSError).code == NSURLErrorCancelled { return }   // cancel()
+            // Asked for (`cancel()`): nothing to report. Cancelled any other way: a failure, retried.
+            if (error as NSError).code == NSURLErrorCancelled, cancelLock.withLock({ cancelled }) { return }
             done(.failed(error.localizedDescription, retry: true))
         } else if written == file.bytes {
             done(.downloaded(partial))
