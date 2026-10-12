@@ -79,8 +79,8 @@ extension AudioExtractor {
     /// Decodes audio (a file, or a video's soundtrack) to 16 kHz mono through ffmpeg and writes `window`-second WAV
     /// pieces `hop` seconds apart, skipping silent ones; one model input ignores anything past 30 s, so windows stay
     /// ≤ 30 s. Streams: memory stays at one window, even for a 3-hour podcast.
-    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink)
-        async throws
+    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink,
+                        limit: Int = .max) async throws
         -> (pieces: [MediaPiece], duration: Double) {
         guard MediaInfo.streams(of: url).audio else { return ([], 0) }
         let duration = MediaInfo.duration(of: url) ?? 0
@@ -117,7 +117,8 @@ extension AudioExtractor {
         // The tail: new audio beyond the previous window's overlap, or the whole file if it was shorter than a window.
         let alreadyCovered = offset == 0 ? 0 : windowSamples - hopSamples
         if buffer.count - alreadyCovered >= Int(minimum * sampleRate) { try emit(buffer.count) }
-        return (pieces, duration > 0 ? duration : Double(offset + buffer.count) / sampleRate)
+        // shortcut: the whole file is decoded even for `limit` pieces; stop ffmpeg early if a file searched by is slow
+        return (Array(pieces.prefix(limit)), duration > 0 ? duration : Double(offset + buffer.count) / sampleRate)
     }
 }
 

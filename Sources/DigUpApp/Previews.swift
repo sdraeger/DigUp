@@ -159,11 +159,14 @@ struct PreviewPane: View {
     }
 }
 
-/// Open and Show in Finder, under the preview (the panel and the window).
+/// Open, Show in Finder and More Like This, under the preview (the panel and the window).
 struct PreviewActions: View {
     let row: ResultRow
     let open: () -> Void
     let reveal: () -> Void
+    /// More Like This (`LikeQuery`): for what's in the index (a row with a segment), and not code, whose index is a
+    /// world of its own.
+    var like: (() -> Void)?
     var controlSize: ControlSize = .regular
 
     var body: some View {
@@ -171,6 +174,10 @@ struct PreviewActions: View {
             Button(row.openTitle, action: open)
                 .keyboardShortcut(.defaultAction)
             Button("Show in Finder", action: reveal)
+            if let like, row.kind != .code, row.segmentID != 0 {
+                Button("More Like This", action: like)
+                    .help("Files like this one, of every kind (⌘L)")
+            }
         }
         .controlSize(controlSize)
     }

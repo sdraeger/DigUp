@@ -67,6 +67,10 @@ struct SearchPanelView: View {
                     Text("DigUp only searches the folders you pick.").foregroundStyle(.secondary)
                     Button("Choose Folders…") { controller.chooseFolders() }
                         .padding(.top, 4)
+                } else if controller.isLike {
+                    Text("Nothing much like it").font(.system(size: 15, weight: .semibold))
+                    Text("It's compared with the files in your folders, by what they show, say or read.")
+                        .foregroundStyle(.secondary)
                 } else if controller.isCode {
                     Text("No good matches in your code").font(.system(size: 15, weight: .semibold))
                     Text("Try saying what the code does, or a name that's in it.").foregroundStyle(.secondary)
@@ -89,7 +93,8 @@ struct SearchPanelView: View {
                             PreviewPane(row: row, imageSize: CGSize(width: 410, height: 214),
                                         open: { controller.openSelected() })
                             PreviewActions(row: row, open: { controller.openSelected() },
-                                           reveal: { controller.revealSelected() }, controlSize: .small)
+                                           reveal: { controller.revealSelected() },
+                                           like: { controller.likeSelected() }, controlSize: .small)
                         }
                     } else if controller.selection == SearchPanelController.weakerToggle {
                         WeakerExplainer(count: controller.results.weaker.count, expanded: controller.showWeaker)
@@ -125,7 +130,7 @@ struct SearchPanelView: View {
             return "↩ \(row.openTitle)\(line)   ⌘↩ Reveal   ␣ Quick Look   ⌘C Copy"
         }
         let place = row?.jump.map { " at \($0)" } ?? ""
-        return "↩ \(row?.openTitle ?? "Open")   ⌘↩ Reveal   ␣ Quick Look\(place)   ⌘C Copy"
+        return "↩ \(row?.openTitle ?? "Open")   ⌘↩ Reveal   ␣ Quick Look\(place)   ⌘C Copy   ⌘L Like this"
     }
 
     private var statusText: String {
@@ -144,7 +149,8 @@ struct SearchPanelView: View {
             if !controller.isCode, let caveat = controller.model.resultsCaveat { return caveat }
             let count = controller.results.strongRows.count
             let weaker = controller.results.weaker.count
-            return (count == 1 ? "1 result" : "\(count) results") + (controller.isCode ? " in your code" : "")
+            return (count == 1 ? "1 result" : "\(count) results")
+                + (controller.isCode ? " in your code" : controller.isLike ? " like it" : "")
                 + (weaker > 0 ? " · \(weaker) weaker" : "")
         }
     }

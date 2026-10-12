@@ -42,6 +42,8 @@ final class SearchPanelController {
     private(set) var phase = SearchPhase.empty
     /// The query is a search of code ("code: …"): the code index, and nothing else.
     private(set) var isCode = false
+    /// The query is a search by example ("like: …", `LikeQuery`).
+    private(set) var isLike = false
     private(set) var note: String?
     var encoder: EngineStatus.Encoder { model.status.encoder }
 
@@ -51,6 +53,8 @@ final class SearchPanelController {
     @ObservationIgnored private var window: SearchPanelWindow?
     @ObservationIgnored weak var field: NSTextField?
     @ObservationIgnored private var generation = 0
+    /// The result More Like This was asked of: its page or moment is what's compared, not the whole file.
+    @ObservationIgnored private var example: (path: String, segment: Int64)?
     /// The generation whose final (meaning) results are showing; late keyword results must not replace them.
     @ObservationIgnored private var finalGeneration = -1
     @ObservationIgnored private var meaningTask: Task<Void, Never>?
@@ -165,6 +169,10 @@ final class SearchPanelController {
         navigated = false
         meaningTask?.cancel()
         let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A file dropped into the field leaves its path there: search by it.
+        if Self.isFilePath(typed) { return query = LikeQuery.query((typed as NSString).expandingTildeInPath) }
+        if let path = LikeQuery.path(of: typed) { return searchLike(path, generation: current) }
+        isLike = false
         let codeText = CodeQuery.text(of: typed)
         isCode = codeText != nil
         let code = isCode
@@ -218,6 +226,42 @@ final class SearchPanelController {
             }
             onFinalResults?()
         }
+    }
+
+    /// A path to a file, and nothing else (what a file dropped into the field leaves).
+    static func isFilePath(_ text: String) -> Bool {
+        guard text.hasPrefix("/") || text.hasPrefix("~/") else { return false }
+        var folder: ObjCBool = false
+        return FileManager.default.fileExists(atPath: (text as NSString).expandingTildeInPath, isDirectory: &folder)
+            && !folder.boolValue
+    }
+
+    /// "like: …": the files most like it, by meaning alone (`Engine.similar`).
+    private func searchLike(_ path: String, generation current: Int) {
+        isLike = true
+        isCode = false
+        results = .empty
+        selection = nil
+        phase = .words   // "Searching…" until they're in
+        resizeWindow()
+        let segment = example?.path == path ? example?.segment : nil
+        meaningTask = Task {
+            let started = Date()
+            let hits = await engine.similar(to: path, segment: segment)
+            guard !Task.isCancelled, current == generation else { return }
+            finalGeneration = current
+            show(hits, query: "", phase: .meaning)
+            log("like \"\((path as NSString).lastPathComponent)\"\(segment == nil ? "" : " (its match)"): "
+                + "\(hits.count) hits (\(results.strongRows.count) strong) in \(ms(since: started))")
+            onFinalResults?()
+        }
+    }
+
+    /// More Like This (⌘L): the files most like the selected result, at the page or moment it matched.
+    func likeSelected() {
+        guard let row = selectedRow, row.kind != .code, row.segmentID != 0 else { return }
+        example = (row.url.path, row.segmentID)
+        query = LikeQuery.query(row.url.path)
     }
 
     private func show(_ hits: [SearchHit], query: String, phase: SearchPhase) {
@@ -325,6 +369,9 @@ final class SearchPanelController {
             return true
         case 16 where modifiers == .command:  // ⌘Y
             toggleQuickLook()
+            return true
+        case 37 where modifiers == .command:  // ⌘L: More Like This
+            likeSelected()
             return true
         case 31 where modifiers == .command:  // ⌘O: the same search in the window, for a bigger look
             openInWindow()

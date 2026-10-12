@@ -153,6 +153,9 @@ nonisolated final class Engine: @unchecked Sendable {
 
     // encoderQueue only
     private var encoder: EmbeddingWorker?
+    /// The model with its image and audio encoders too (~0.9 GB), for a file searched by that isn't indexed
+    /// (`similar`): started when one is, and gone with the query encoder.
+    private var mediaEncoder: EmbeddingWorker?
     /// When the encoder last failed to start or to embed: it isn't tried again for `encoderRetrySeconds`, so a model
     /// that can't load isn't reloaded on every keystroke.
     private var encoderFailedAt: Date?
@@ -853,18 +856,78 @@ nonisolated final class Engine: @unchecked Sendable {
                 }
                 let hits = try? searcher?.search(text, queryVector: values, kinds: kinds, limit: limit,
                                                  prefixLast: prefixLast)
-                // Only files that are searched (`FolderSelection`'s rule, as the crawler walks them) and of types not
-                // skipped: a removed folder's rows (or a newly skipped type's) can outlive it until a helper syncs
-                // (indexing was paused, or the app quit first).
-                let (chosen, excluded, types): ([URL], [URL], Set<String>) = lock.withLock {
-                    (self.roots, self.excluded, Set(self.excludedTypes))
+                continuation.resume(returning: visible(hits ?? []))
+            }
+        }
+    }
+
+    /// Only files that are searched (`FolderSelection`'s rule, as the crawler walks them) and of types not skipped: a
+    /// removed folder's rows (or a newly skipped type's) can outlive it until a helper syncs (indexing was paused, or
+    /// the app quit first).
+    private func visible(_ hits: [SearchHit]) -> [SearchHit] {
+        let (chosen, excluded, types): ([URL], [URL], Set<String>) = lock.withLock {
+            (self.roots, self.excluded, Set(self.excludedTypes))
+        }
+        let folders = chosen.map(\.path), skipped = excluded.map(\.path)
+        return hits.filter { hit in
+            FolderSelection.isSearched(hit.path, folders: folders, skipped: skipped)
+                && !types.contains((hit.path as NSString).pathExtension.lowercased())
+                && FileManager.default.fileExists(atPath: hit.path)
+        }
+    }
+
+    /// Files like the one at `path` (`LikeQuery`), by meaning alone and of every kind, best first, without the file
+    /// itself. By the vector of `segment` (the page or moment a result matched) or of the whole file when it's indexed;
+    /// else by what indexing would read of it first (`Example`), embedded now.
+    func similar(to path: String, segment: Int64? = nil, kinds: Set<FileKind>? = nil, limit: Int = 40) async
+        -> [SearchHit] {
+        let stored = await withCheckedContinuation { continuation in
+            searchQueue.async { [self] in
+                continuation.resume(returning: (try? searcher?.vector(likeFile: path, segment: segment)) ?? nil)
+            }
+        }
+        let embedded = stored == nil ? await embedExample(path) : nil
+        guard let values = stored ?? embedded?.values else { return [] }
+        return await withCheckedContinuation { continuation in
+            searchQueue.async { [self] in
+                // A vector embedded now must come from the index's model: vectors of two models can't be compared.
+                if let embedded, embedded.source != searcher?.vectorSource { return continuation.resume(returning: []) }
+                let hits = (try? searcher?.search("", queryVector: values, kinds: kinds, limit: limit + 1)) ?? []
+                continuation.resume(returning: Array(visible(hits.filter { $0.path != path }).prefix(limit)))
+            }
+        }
+    }
+
+    /// A file that isn't indexed, embedded the way indexing would embed its start: text by the query encoder, a
+    /// picture or sound by the media encoder. Nil when there's nothing to read in it, or no model to read it with.
+    private func embedExample(_ path: String) async -> QueryVector? {
+        await withCheckedContinuation { continuation in
+            encoderQueue.async { [self] in
+                defer { scheduleIdleExit() }
+                let example: Example?
+                do {
+                    example = try Example.prepare(URL(fileURLWithPath: path))
+                } catch {
+                    log("like: can't read \(tildePath(path)): \(error)")
+                    return continuation.resume(returning: nil)
                 }
-                let folders = chosen.map(\.path), skipped = excluded.map(\.path)
-                continuation.resume(returning: (hits ?? []).filter { hit in
-                    FolderSelection.isSearched(hit.path, folders: folders, skipped: skipped)
-                        && !types.contains((hit.path as NSString).pathExtension.lowercased())
-                        && FileManager.default.fileExists(atPath: hit.path)
-                })
+                let worker: EmbeddingWorker?
+                let vector: [Float]?
+                switch example {
+                case .text(let text):
+                    worker = runningEncoder()
+                    vector = (try? worker?.embedTexts([text]))?.first
+                case .image(let input, let budget):
+                    worker = runningMediaEncoder()
+                    vector = (try? worker?.embedImages([input], budget: budget))?.first?.vector
+                case .audio(let input):
+                    worker = runningMediaEncoder()
+                    vector = (try? worker?.embedAudio([input]))?.first?.vector
+                case nil:
+                    (worker, vector) = (nil, nil)
+                }
+                guard let worker, let vector else { return continuation.resume(returning: nil) }
+                continuation.resume(returning: QueryVector(values: vector, source: worker.info.vectorSource))
             }
         }
     }
@@ -1014,6 +1077,25 @@ nonisolated final class Engine: @unchecked Sendable {
         }
     }
 
+    private func runningMediaEncoder() -> EmbeddingWorker? {
+        if let mediaEncoder { return mediaEncoder }
+        let python = try? WorkerConfig.fromEnvironment()
+        guard python != nil || FileManager.default.fileExists(
+            atPath: modelsDirectory.appendingPathComponent(ModelFiles.media.name).path) else { return nil }
+        do {
+            var config = python ?? .helper(Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/digup"))
+            config.environment["DIGUP_MODELS"] = modelsDirectory.path
+            config.log = indexDirectory.appendingPathComponent("worker-example.log")
+            config.qos = .userInitiated
+            let started = Date()
+            mediaEncoder = try EmbeddingWorker(config, textOnly: false)
+            log("encoder: image and audio encoders ready in \(ms(since: started))")
+        } catch {
+            log("encoder: can't start the image and audio encoders: \(error)")
+        }
+        return mediaEncoder
+    }
+
     private func runningEncoder() -> EmbeddingWorker? {
         if let encoder { return encoder }
         guard encoderFailedAt.map({ Date().timeIntervalSince($0) > encoderRetrySeconds }) ?? true else { return nil }
@@ -1047,7 +1129,7 @@ nonisolated final class Engine: @unchecked Sendable {
     private func scheduleIdleExit() {
         encoderIdleExit?.cancel()
         let exit = DispatchWorkItem { [self] in
-            guard encoder != nil else { return }
+            guard encoder != nil || mediaEncoder != nil else { return }
             log("encoder: idle for \(Int(encoderIdleSeconds)) s, stopping")
             stopEncoder()
             searchQueue.async { [self] in
@@ -1063,6 +1145,8 @@ nonisolated final class Engine: @unchecked Sendable {
     private func stopEncoder() {
         encoder?.close()
         encoder = nil
+        mediaEncoder?.close()
+        mediaEncoder = nil
         vectorCache.removeAll()
         encoderIdleExit?.cancel()
         encoderIdleExit = nil

@@ -292,6 +292,30 @@ public final class Searcher {
         return hits.prefix { $0.score >= top * ratio }.count
     }
 
+    /// What a `like:` search goes by (`LikeQuery`): the vector of `segment` (the page or moment a result matched), or,
+    /// without one, the file's vectors averaged, and normalized like a query's. Nil for a file that isn't indexed or
+    /// has no vectors (yet).
+    public func vector(likeFile path: String, segment: Int64? = nil) throws -> [Float]? {
+        var sum = [Float](repeating: 0, count: Vectors.dimension)
+        var found = false
+        let add = { (row: Statement) in
+            guard let blob = row.blob(0), blob.count == Vectors.dimension * MemoryLayout<Float16>.stride else { return }
+            blob.withUnsafeBytes { halves in
+                for (index, half) in halves.bindMemory(to: Float16.self).enumerated() { sum[index] += Float(half) }
+            }
+            found = true
+        }
+        if let segment {
+            try store.db.query("SELECT vec FROM segments WHERE id = ? AND vec IS NOT NULL", [.int(segment)], row: add)
+        }
+        if !found {
+            try store.db.query("SELECT s.vec FROM segments s JOIN files f ON f.id = s.file WHERE f.path = ? "
+                               + "AND s.vec IS NOT NULL", [.text(path)], row: add)
+        }
+        let norm = sum.reduce(0) { $0 + $1 * $1 }.squareRoot()
+        return found && norm > 0 ? sum.map { $0 / norm } : nil
+    }
+
     /// Cosine similarity of `query` with every stored vector (all are L2-normalized): a matrix-vector product, done a
     /// block of rows at a time, each block turned into float32 first.
     private func score(_ query: [Float]) -> [Float] {

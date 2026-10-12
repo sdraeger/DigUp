@@ -221,6 +221,8 @@ final class SearchModel {
     @ObservationIgnored private let engine: Engine
     @ObservationIgnored private var generation = 0
     @ObservationIgnored private var task: Task<Void, Never>?
+    /// The result More Like This was asked of: its page or moment is what's compared, not the whole file.
+    @ObservationIgnored private var example: (path: String, segment: Int64)?
 
     init(engine: Engine) {
         self.engine = engine
@@ -255,6 +257,12 @@ final class SearchModel {
         engine.open(row)
     }
 
+    /// More Like This: the files most like `row`, at the page or moment it matched.
+    func like(_ row: ResultRow) {
+        example = (row.url.path, row.segmentID)
+        query = LikeQuery.query(row.url.path)
+    }
+
     func move(by step: Int) {
         let ids = rows.map(\.id)
         guard !ids.isEmpty else { return }
@@ -276,6 +284,26 @@ final class SearchModel {
             results = .empty
             counts = [:]
             hasResults = false
+            return
+        }
+        // A file dropped into the field leaves its path there: search by it.
+        if SearchPanelController.isFilePath(typed) {
+            return query = LikeQuery.query((typed as NSString).expandingTildeInPath)
+        }
+        if let path = LikeQuery.path(of: typed) {
+            let (segment, filter) = (example?.path == path ? example?.segment : nil, self.filter)
+            task = Task {
+                let all = await engine.similar(to: path, segment: segment, limit: 120)
+                guard !Task.isCancelled, current == generation else { return }
+                var counts: [ResultGroupKind: Int] = [:]
+                for hit in all.prefix(Searcher.strongCount(all)) { counts[ResultGroupKind(hit.kind), default: 0] += 1 }
+                self.counts = counts
+                results = ResultSet(filter.map { filter in all.filter { filter.kinds.contains($0.kind) } } ?? all)
+                showWeaker = false
+                if !rows.contains(where: { $0.id == selection }) { selection = rows.first?.id }
+                hasResults = true
+                log("window: like \"\((path as NSString).lastPathComponent)\": \(results.ranked.count) results")
+            }
             return
         }
         if code, !engine.hasCode || text.isEmpty {
@@ -348,7 +376,8 @@ struct SearchWindowView: View {
                             PreviewPane(row: row, imageSize: CGSize(width: 292, height: 230),
                                         open: { search.open(row) })
                             PreviewActions(row: row, open: { search.open(row) },
-                                           reveal: { NSWorkspace.shared.activateFileViewerSelecting([row.url]) })
+                                           reveal: { NSWorkspace.shared.activateFileViewerSelecting([row.url]) },
+                                           like: { search.like(row) })
                         }
                         .padding(16)
                     }

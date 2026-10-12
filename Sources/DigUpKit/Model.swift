@@ -99,6 +99,26 @@ public enum Prompts {
     }
 }
 
+/// "like: ~/Pictures/beach.jpg": files like that one, of every kind (pictures, pages, moments, passages), by meaning
+/// alone. More Like This on a result writes it, and so does dropping a file into the search field.
+public enum LikeQuery {
+    public static let prefix = "like:"
+
+    /// The file's path (`~` expanded), or nil for a search that isn't one by example.
+    public static func path(of query: String) -> String? {
+        let trimmed = query.drop { $0.isWhitespace }
+        guard trimmed.count > prefix.count, trimmed.prefix(prefix.count).lowercased() == prefix else { return nil }
+        let path = trimmed.dropFirst(prefix.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        return path.isEmpty ? nil : (path as NSString).expandingTildeInPath
+    }
+
+    /// The query for the file at `path`, home written as `~`.
+    public static func query(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return prefix + " " + (path.hasPrefix(home + "/") ? "~" + path.dropFirst(home.count) : path)
+    }
+}
+
 /// "code: retry with backoff": a search of the code index, and nothing else. Without the prefix a search never sees
 /// code (the code index is a file of its own: `IndexStore.codeFile`).
 public enum CodeQuery {

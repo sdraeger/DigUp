@@ -6,11 +6,12 @@ import CoreGraphics
 import Foundation
 
 extension AudioExtractor {
-    /// Decodes audio (a file, or a video's soundtrack) to 16 kHz mono and writes `window`-second WAV pieces `hop`
+    /// Decodes audio (a file, or a video's soundtrack) to 16 kHz mono and keeps `window`-second WAV pieces `hop`
     /// seconds apart, skipping silent ones. One model input ignores anything past 30 s, so windows stay ≤ 30 s.
-    /// Streams: memory stays at one window, even for a 3-hour podcast.
-    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink)
-        async throws
+    /// Streams: decoding holds one window at a time, and `sink` keeps what's past its budget on disk. `limit`: stop
+    /// after that many pieces (a file searched by: its first).
+    static func windows(of url: URL, window: Double, hop: Double, minimum: Double = 2, into sink: MediaSink,
+                        limit: Int = .max) async throws
         -> (pieces: [MediaPiece], duration: Double) {
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .audio).first else { return ([], 0) }
@@ -45,6 +46,10 @@ extension AudioExtractor {
                 try emit(windowSamples)
                 buffer.removeFirst(hopSamples)
                 offset += hopSamples
+            }
+            if pieces.count >= limit {
+                reader.cancelReading()
+                return (pieces, duration)
             }
         }
         if reader.status == .failed { throw reader.error ?? ExtractError.unreadable("audio decoding failed") }
