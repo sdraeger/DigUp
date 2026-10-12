@@ -45,8 +45,11 @@ nonisolated final class FolderWatcher: @unchecked Sendable {
 
     fileprivate func received(_ changes: [(path: String, isFolder: Bool)]) {
         let relevant = changes.filter { change in
-            let root = roots.first { change.path == $0 || FolderSelection.isInside(change.path, $0) } ?? ""
-            return !change.path.dropFirst(root.count).split(separator: "/").contains { $0.hasPrefix(".") }
+            // Any watched folder it's in without a hidden one between (~/.config/notes, with home watched too).
+            let inside = roots.filter { change.path == $0 || FolderSelection.isInside(change.path, $0) }
+            return (inside.isEmpty ? [""] : inside).contains { root in
+                !change.path.dropFirst(root.count).split(separator: "/").contains { $0.hasPrefix(".") }
+            }
         }
         if !relevant.isEmpty { handler(relevant) }
     }

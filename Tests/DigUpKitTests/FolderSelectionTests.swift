@@ -85,6 +85,19 @@ import Testing
         #expect(selection.skipped == ["/H/Movies"])
     }
 
+    @Test func foldersTheCrawlNeverWalksIntoAreSearchedOnlyWhenChosen() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let cloud = home + "/Library/Mobile Documents/com~apple~CloudDocs"
+        #expect(!FolderSelection(chosen: [home]).isSearched(cloud + "/a.pdf"))
+        #expect(!FolderSelection(chosen: [home]).isSearched(home + "/.config/notes/a.md"))
+        #expect(!FolderSelection(chosen: [home]).isSearched(home + "/web/node_modules/pkg/a.md"))
+        let selection = FolderSelection(chosen: [home, cloud, home + "/.config/notes"])
+        #expect(selection.folders == [home, cloud, home + "/.config/notes"])   // not covered by home
+        #expect(selection.isSearched(cloud + "/Docs/a.pdf"))
+        #expect(selection.searchedAs(cloud + "/a.pdf") == cloud)
+        #expect(selection.isSearched(home + "/Documents/a.pdf"))
+    }
+
     @Test func pathsAreComparedByWholeNames() {
         #expect(!FolderSelection.isInside("/a/bc", "/a/b"))
         #expect(FolderSelection.isInside("/a/b/c", "/a/b"))

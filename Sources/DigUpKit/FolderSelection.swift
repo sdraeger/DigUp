@@ -33,6 +33,9 @@ public struct FolderSelection: Equatable, Sendable {
         folders.contains { folder in
             (path == folder || isInside(path, folder))
                 && !skipped.contains { skip in isInside(skip, folder) && (path == skip || isInside(path, skip)) }
+                // Not through a folder its crawl never enters (~/Library, node_modules): chosen alone, it's searched.
+                && Rules.isWalked(path, root: folder, home: FileManager.default.homeDirectoryForCurrentUser.path,
+                                  excluded: [])
         }
     }
 
