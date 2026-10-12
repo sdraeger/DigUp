@@ -48,6 +48,9 @@ final class IndexService: @unchecked Sendable {
     private let modelReady: () -> Bool
     private let newFilesLimit: Int
     private let linger: Double
+    /// When files were last embedded: the warm model goes `linger` seconds after that, however many syncs come in
+    /// between (a sync with nothing to embed used to start the wait over, so steady changes kept ~1 GB loaded).
+    private var lastEmbedded = DispatchTime.now()
 
     private let lock = NSLock()
     private var syncRequested = true       // the first thing it does
@@ -233,6 +236,7 @@ final class IndexService: @unchecked Sendable {
     /// Embeds a part's pending files (`only` some). False when indexing has to stop (the worker died, or the index was
     /// built with other settings).
     private func run(_ part: Part, only ids: Set<Int64>?) -> Bool {
+        defer { lastEmbedded = .now() }
         let started = Date()
         let isNew = ids != nil
         do {
@@ -260,6 +264,7 @@ final class IndexService: @unchecked Sendable {
     /// The rest of long files (`Indexer.finishLongFiles`), yielding as the backfill does. False when indexing has to
     /// stop.
     private func finishLongFiles() -> Bool {
+        defer { lastEmbedded = .now() }
         let started = Date()
         do {
             let states = try main.indexer.finishLongFiles(shouldStop: { [self] in
@@ -282,9 +287,10 @@ final class IndexService: @unchecked Sendable {
         }
     }
 
-    /// Waits up to `linger` seconds for something to do. False: time's up, or told to stop.
+    /// Waits for something to do until `linger` seconds after files were last embedded. False: time's up, or told to
+    /// stop.
     private func waitForWork() -> Bool {
-        let deadline = DispatchTime.now() + linger
+        let deadline = lastEmbedded + linger
         while wake.wait(timeout: deadline) == .success {
             let (sync, codeSync, stop, backfill) = lock.withLock {
                 (syncRequested, codeSyncRequested, stopRequested, backfillAllowed)
