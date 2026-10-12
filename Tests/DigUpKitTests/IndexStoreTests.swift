@@ -99,6 +99,22 @@ import WinSDK
         #expect(ModelFiles.totalBytes == 864_676_480)
     }
 
+    @Test func oldModelFilesGoOnceTheCurrentOnesAreThere() throws {
+        let folder = folder
+        let touch = { FileManager.default.createFile(atPath: folder.appendingPathComponent($0).path, contents: nil) }
+        for name in [ModelFiles.text.name, ModelFiles.media.name + ".partial", "old-Q8_0.gguf", "old-Q8_0.gguf.partial",
+                     "notes.txt", "notes.partial"] { _ = touch(name) }
+        try FileManager.default.createDirectory(at: folder.appendingPathComponent("folder.gguf"),
+                                                withIntermediateDirectories: false)
+        #expect(ModelFiles.removeOldFiles(in: folder).isEmpty)   // the media file is still downloading
+        _ = touch(ModelFiles.media.name)
+        #expect(ModelFiles.removeOldFiles(in: folder).sorted()
+                == [ModelFiles.media.name + ".partial", "old-Q8_0.gguf", "old-Q8_0.gguf.partial"])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+                == ["embeddinggemma-2-Q8_0.gguf", "folder.gguf", "mmproj-embeddinggemma-2-Q8_0.gguf", "notes.partial",
+                    "notes.txt"])
+    }
+
     @Test func modelFilesComeFromTheHuggingFaceCacheWhenThere() throws {
         // As `hf download` leaves them: snapshots/<revision>/<name> → a blob. Sparse, so no disk is used.
         let hub = folder.appendingPathComponent("hub")

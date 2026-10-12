@@ -11,6 +11,8 @@ import Observation
 ///   file under its real name is always whole.
 /// - Network problems retry by themselves (2 s, 5 s, 15 s, then from 30 s, doubling up to 30 min). A full disk, or a
 ///   file that fails its check twice, waits for the user (`start()` again).
+/// - Model files an earlier version downloaded to Application Support and this one doesn't use are deleted once this
+///   one's are all there.
 /// - The folder is excluded from Time Machine: the files can always be downloaded again.
 ///
 /// This is the app's only network use. It starts when onboarding's Get Started is clicked, or at launch when a set-up
@@ -51,6 +53,7 @@ final class ModelDownload {
         self.folder = folder
         phase = ModelFiles.missing(in: folder).isEmpty ? .ready : .needed
         received = bytesOnDisk()
+        if phase == .ready { removeOldFiles() }
     }
 
     var isReady: Bool { phase == .ready }
@@ -99,6 +102,7 @@ final class ModelDownload {
             phase = .ready
             received = total
             log("model: ready in \(tildePath(folder.path))")
+            removeOldFiles()
             onReady()
             return
         }
@@ -327,6 +331,14 @@ final class ModelDownload {
     }
 
     // MARK: Disk
+
+    /// In the app's own folder only: one chosen with `-modelsDir` may hold other models that aren't DigUp's to delete.
+    private func removeOldFiles() {
+        guard folder.path == ModelFiles.installed.path else { return }
+        for name in ModelFiles.removeOldFiles(in: folder) {
+            log("model: deleted \(name), which this version doesn't use")
+        }
+    }
 
     private func partialBytes(of file: ModelFiles.File) -> Int64 {
         size(of: folder.appendingPathComponent(file.name + ".partial"))

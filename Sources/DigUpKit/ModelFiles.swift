@@ -59,6 +59,23 @@ public enum ModelFiles {
         all.filter { !FileManager.default.fileExists(atPath: folder.appendingPathComponent($0.name).path) }
     }
 
+    /// Deletes what an earlier version downloaded into `folder` that this one doesn't use (an update that changed
+    /// the model): other `.gguf` files and unfinished downloads (`<name>.partial`), once every current file is there.
+    /// Nothing else in the folder, nor in folders inside it. Returns the names deleted.
+    public static func removeOldFiles(in folder: URL) -> [String] {
+        guard missing(in: folder).isEmpty else { return [] }   // a .partial may still be downloading
+        let current = Set(all.map(\.name))
+        let urls = (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? []
+        return urls.compactMap { url in
+            let name = url.lastPathComponent
+            guard name.hasSuffix(".gguf") || name.hasSuffix(".gguf.partial"), !current.contains(name),
+                  (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true,
+                  (try? FileManager.default.removeItem(at: url)) != nil
+            else { return nil }
+            return name
+        }
+    }
+
     /// The SHA-256 of a file as lowercase hex, read in 8 MB pieces (a 555 MB file takes about half a second).
     public static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
