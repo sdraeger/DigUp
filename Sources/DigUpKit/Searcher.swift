@@ -57,6 +57,9 @@ public final class Searcher {
     /// Reads the files and all vectors again (after indexing added some).
     public func reload() throws {
         releaseVectors()
+        // One snapshot for the files, the count and the rows: vectors saved in between would be left out.
+        try store.db.execute("BEGIN")
+        defer { try? store.db.execute("COMMIT") }
         try reloadFiles()
         var rows = 0
         try store.db.query("SELECT COUNT(*) FROM segments WHERE vec IS NOT NULL") { rows = Int($0.int(0)) }
