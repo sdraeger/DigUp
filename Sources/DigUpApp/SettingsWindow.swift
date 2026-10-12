@@ -43,7 +43,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         addSheet = AddFoldersController(app: app)
         codeSheet = AddFoldersController(app: app, code: true)
         super.init()
-        state.addFolders = { [weak self] in self?.addFolders() }
+        state.addFolders = { [weak self] in self?.addFolders($0) }
         state.addCodeFolders = { [weak self] in self?.addCodeFolders() }
         for sheet in [addSheet, codeSheet] {
             sheet.onAdded = { [weak self] in
@@ -53,9 +53,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         }
     }
 
-    /// Opens Add Folders on the Folders tab.
-    func addFolders() {
-        addSheet.begin(on: window)
+    /// Opens Add Folders on the Folders tab, with `folders` checked.
+    func addFolders(_ folders: [URL] = []) {
+        addSheet.begin(on: window, adding: folders)
     }
 
     /// Opens the code folders' sheet on the Code tab.
@@ -129,7 +129,7 @@ final class SettingsState {
     var checksForUpdates = false
     @ObservationIgnored let app: AppController
     @ObservationIgnored var selectTab: (SettingsTab) -> Void = { _ in }
-    @ObservationIgnored var addFolders: () -> Void = {}
+    @ObservationIgnored var addFolders: ([URL]) -> Void = { _ in }
     @ObservationIgnored var addCodeFolders: () -> Void = {}
 
     init(app: AppController) {
@@ -282,10 +282,11 @@ private struct FolderSettings: View {
                 Text("Folders to search")
             } footer: {
                 HStack {
-                    Button(action: state.addFolders) {
+                    Button { state.addFolders([]) } label: {
                         Label("Add Folders…", systemImage: "plus")
                     }
                     Spacer()
+                    CoverageButton(state: state)
                 }
             }
             Section {
@@ -404,6 +405,33 @@ private struct FolderSettings: View {
             state.app.setIndexHours(on: true, hours: end == \IndexHours.start ? IndexHours(start: minute, end: hours.end)
                                                                               : IndexHours(start: hours.start, end: minute))
         })
+    }
+}
+
+/// The Mac's folders and which of them DigUp searches, in a popover (`Coverage`), made when it opens and let go when
+/// it closes.
+private struct CoverageButton: View {
+    let state: SettingsState
+    @State private var coverage: Coverage?
+
+    var body: some View {
+        Button { coverage = Coverage(settings: state.model.settings) } label: {
+            Label("Coverage", systemImage: "list.bullet.indent")
+        }
+        .help("See which folders on this Mac DigUp searches, and what's in the others")
+        .popover(isPresented: Binding(get: { coverage != nil }, set: { if !$0 { close() } }), arrowEdge: .bottom) {
+            if let coverage {
+                CoverageView(coverage: coverage) { folder in
+                    close()
+                    state.addFolders([folder])
+                }
+            }
+        }
+    }
+
+    private func close() {
+        coverage?.close()
+        coverage = nil
     }
 }
 

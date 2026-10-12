@@ -23,7 +23,8 @@ final class AddFoldersController {
 
     var isOpen: Bool { choices != nil }
 
-    func begin(on window: NSWindow?) {
+    /// `adding`: folders checked from the start, as if picked in the open panel (Coverage's Add…).
+    func begin(on window: NSWindow?, adding folders: [URL] = []) {
         guard choices == nil else { return }
         let settings = app.model.settings
         let selection = code
@@ -33,9 +34,12 @@ final class AddFoldersController {
             .filter { !selection.isSearched($0.path) }
         let choices = FolderChoices(rows: suggestions, selection: selection, types: code ? [] : settings.excludedTypes,
                                     code: code)
+        choices.add(folders)
         self.choices = choices
         // Snapshot runs never put an open panel on screen (-debugChoices picks folders instead).
-        guard suggestions.isEmpty, !AppController.offscreen else { return present(choices, on: window) }
+        guard suggestions.isEmpty, folders.isEmpty, !AppController.offscreen else {
+            return present(choices, on: window)
+        }
         app.pickFolders(for: window) { [weak self] picked in
             guard let self else { return }
             guard !picked.isEmpty else {

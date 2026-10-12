@@ -42,7 +42,8 @@ import SwiftUI
 ///     -debugReshow N          after the query's final results, hide and show the panel N times (logs show times)
 ///     -debugWindow PAGE       open a window instead of the panel and snapshot it: search (with -debugQuery),
 ///                             settings:general|folders|code|storage, settings:add (Folders with Add Folders open),
-///                             settings:addcode (Code with its folders' sheet open),
+///                             settings:addcode (Code with its folders' sheet open), settings:coverage (Folders'
+///                             Coverage popover, drawn in a window of its own, its rows logged),
 ///                             onboarding:welcome|folders|code|shortcut|ready
 ///                             (-debugCloseWindow YES closes it afterwards, to measure what closing gives back;
 ///                             -debugWindowAfter S opens it S seconds after launch, once the helper has reported)
@@ -322,6 +323,20 @@ enum DebugHooks {
                 loaded = { app.settingsWindow.state.isLoaded && sheet.choices?.estimatesDone ?? false }
                 draw = { try sheet.snapshot(to: $0) }
                 close = { sheet.end() }
+            case "settings" where parts.count > 1 && parts[1] == "coverage":
+                app.showSettings(.folders)
+                let coverage = Coverage(settings: app.model.settings)
+                let window = NSWindow(contentViewController: NSHostingController(rootView: CoverageView(
+                    coverage: coverage, add: { _ in })))
+                loaded = { !coverage.isCounting }
+                draw = { url in
+                    log("coverage: " + coverage.rows.map { row in
+                        String(repeating: "  ", count: row.depth) + "\(row.name) [\(row.mark)"
+                            + (coverage.counts[row.path].map { " \(KindCounts(counts: $0).description)" } ?? "") + "]"
+                    }.joined(separator: " | "))
+                    try Snapshot.write(window, to: url)
+                }
+                close = { coverage.close() }
             case "settings":
                 let tab = SettingsTab(rawValue: parts.count > 1 ? parts[1] : "general") ?? .general
                 app.showSettings(tab)

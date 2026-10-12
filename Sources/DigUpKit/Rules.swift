@@ -118,10 +118,10 @@ public enum Rules {
             || (bytes[4] == 0x47 && bytes[196] == 0x47 && bytes[388] == 0x47)
     }
 
-    /// macOS marks screenshots with an extended attribute that survives moves and copies (`hasScreenshotMarker`); names
-    /// are the fallback, and all there is elsewhere.
-    public static func isScreenshot(_ url: URL) -> Bool {
-        if hasScreenshotMarker(url) { return true }
+    /// macOS marks screenshots with an extended attribute that survives moves and copies (`hasScreenshotMarker`, or
+    /// `captured`: read already, as Spotlight lists it); names are the fallback, and all there is elsewhere.
+    public static func isScreenshot(_ url: URL, captured: Bool? = nil) -> Bool {
+        if captured ?? hasScreenshotMarker(url) { return true }
         let name = url.lastPathComponent
         return screenshotPrefixes.contains { name.hasPrefix($0) }
     }

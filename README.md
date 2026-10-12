@@ -88,6 +88,9 @@ folders like `~/.ssh`, app bundles or caches. It skips folders that look like da
 files that only live in the cloud. You can skip more folders or file types in Settings. DigUp only reads your files;
 it never changes, moves or uploads them.
 
+Settings → Folders → Coverage shows every folder on your Mac as a tree, marked searched or not. A folder of yours that
+isn't searched shows about what DigUp would find in it, from Spotlight's index, so one worth adding stands out.
+
 The first pass takes a few minutes for a few hundred files and can take an hour for a big Downloads folder. That
 happens once, on battery too unless you tell it to wait for a charger, and it pauses in Low Power Mode. After that, a
 new file is searchable a second or two after it lands.

@@ -7,7 +7,8 @@ import Foundation
 import UniformTypeIdentifiers
 
 extension Rules {
-    public static func classify(_ url: URL, type: UTType?, options: IndexOptions) -> Classification {
+    public static func classify(_ url: URL, type: UTType?, options: IndexOptions,
+                                captured: Bool? = nil) -> Classification {
         let ext = url.pathExtension.lowercased()
         if options.excludedExtensions.contains(ext) { return .skip("excluded type") }
         // .ts / .mts are usually TypeScript, which Spotlight calls MPEG-2 video. Only a real transport stream is video.
@@ -22,7 +23,7 @@ extension Rules {
             return options.includeCode ? .index(.doc) : .skip("code or data file")
         }
         if type.conforms(to: .pdf) { return .index(.pdf) }
-        if type.conforms(to: .image) { return .index(isScreenshot(url) ? .screenshot : .image) }
+        if type.conforms(to: .image) { return .index(isScreenshot(url, captured: captured) ? .screenshot : .image) }
         if type.conforms(to: .movie) { return .index(.video) }
         if type.conforms(to: .audio) { return .index(.audio) }
         return .ignore
