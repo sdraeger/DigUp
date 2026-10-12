@@ -147,6 +147,8 @@ nonisolated final class Engine: @unchecked Sendable {
     private var codeSearcher: Searcher?
     private var codeStore: IndexStore?
     private var warnedAboutSource = false
+    /// The app folders' modification dates when the apps were last listed (`prewarm`).
+    private var appFoldersChanged: [Date?] = []
 
     // encoderQueue only
     private var encoder: EmbeddingWorker?
@@ -932,9 +934,15 @@ nonisolated final class Engine: @unchecked Sendable {
             }
         }
         searchQueue.async { [self] in
-            // Listed before the vectors load, so the first keystroke finds them. Only written here.
+            // Listed before the vectors load, so the first keystroke finds them, and again only once an app folder
+            // changed (an app added, removed or updated): the search window prewarms on every keystroke.
+            let changed = Apps.folders.map {
+                (try? FileManager.default.attributesOfItem(atPath: $0))?[.modificationDate] as? Date
+            }
+            guard changed != appFoldersChanged else { return }
+            appFoldersChanged = changed
             let started = Date()
-            let found = Apps.installed()
+            let found = Apps.installed()   // `apps` is only written here
             if lock.withLock({ apps }) != found {
                 lock.withLock { apps = found }
                 log("apps: \(found.count) installed, listed in \(ms(since: started))")
