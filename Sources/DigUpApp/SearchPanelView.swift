@@ -14,6 +14,9 @@ struct SearchPanelView: View {
                     .frame(maxHeight: .infinity)
                 Divider()
                 footer
+            } else if !controller.saved.isEmpty {
+                Divider()
+                SavedSearchList(controller: controller)
             }
         }
         .frame(width: SearchPanelController.width)
@@ -40,6 +43,11 @@ struct SearchPanelView: View {
             }
             if controller.phase == .words, controller.encoder == .starting {
                 ProgressView().controlSize(.small)
+            }
+            if controller.isSaved {
+                Image(systemName: "bookmark.fill")
+                    .foregroundStyle(.secondary)
+                    .help("Saved: you'll be told when new files match (⌘S forgets it)")
             }
             if let activity = controller.model.activityBadge {
                 Text(activity)
@@ -131,6 +139,7 @@ struct SearchPanelView: View {
         }
         let place = row?.jump.map { " at \($0)" } ?? ""
         return "↩ \(row?.openTitle ?? "Open")   ⌘↩ Reveal   ␣ Quick Look\(place)   ⌘C Copy   ⌘L Like this"
+            + "   ⌘S Save"
     }
 
     private var statusText: String {
@@ -233,6 +242,47 @@ struct GroupHeader: View {
             .padding(.bottom, 3)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityAddTraits(.isHeader)
+    }
+}
+
+/// An empty field shows the saved searches: run one again (↩, or a double-click), or forget one (⌘⌫).
+private struct SavedSearchList: View {
+    let controller: SearchPanelController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                GroupHeader(title: "Saved Searches")
+                Text("↩ Search   ⌘⌫ Forget")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.tertiary)
+                    .padding(.horizontal, 10)
+                    .padding(.top, 7)
+            }
+            ForEach(controller.saved.prefix(SearchPanelController.savedRowsShown), id: \.self) { query in
+                HStack(spacing: 8) {
+                    Image(systemName: LikeQuery.path(of: query) == nil ? "bookmark" : "square.on.square")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    Text(query)
+                        .font(.system(size: 13))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .frame(height: SearchPanelController.savedRowHeight)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(controller.selection == SearchPanelController.savedRow + query
+                          ? Color.accentColor.opacity(0.24) : Color.clear))
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { controller.query = query }
+                .onTapGesture { controller.selectSaved(query) }
+                .accessibilityAddTraits(.isButton)
+            }
+        }
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 

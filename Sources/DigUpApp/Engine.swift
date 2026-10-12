@@ -117,6 +117,9 @@ nonisolated final class Engine: @unchecked Sendable {
     private var codeSearcherStale = false
     /// The sync after files that were still being written have settled (`Indexer.settle`).
     private var settledSync: DispatchWorkItem?
+    /// Files indexed as new since the helper last went idle (new files, not the first pass's), for saved searches to
+    /// look for matches among (`onNewFiles`).
+    private var newlyIndexed: [String] = []
 
     /// Code search: the code index once code has been quiet this long (a file being edited changes on every save, a
     /// branch switch or a build changes many at once), or at least this often while it keeps changing.
@@ -173,6 +176,9 @@ nonisolated final class Engine: @unchecked Sendable {
     private let onStatus: @MainActor @Sendable (EngineStatus) -> Void
 
     /// `backfillBlocker`: why the first full pass has to wait (see `PowerPolicy`), or nil.
+    /// Files just indexed as new, on the main thread (`newlyIndexed`). Set once at launch, before a helper runs.
+    var onNewFiles: (@MainActor @Sendable ([String]) -> Void)?
+
     init(settings: AppSettings, backfillBlocker: String?, heldUntil: Date?,
          onStatus: @escaping @MainActor @Sendable (EngineStatus) -> Void) {
         indexDirectory = settings.indexDirectory
@@ -620,6 +626,7 @@ nonisolated final class Engine: @unchecked Sendable {
             if event["new"] as? Bool == true, let path = event["path"] as? String {
                 log(String(format: "index: %@ %@ in %.2f s", (path as NSString).lastPathComponent,
                            event["state"] as? String ?? "?", event["seconds"] as? Double ?? 0))
+                if ["done", "partial"].contains(event["state"] as? String) { newlyIndexed.append(path) }
             }
             searcherStale = true
             refreshSearcher(force: false)
@@ -637,6 +644,7 @@ nonisolated final class Engine: @unchecked Sendable {
             applyCounts(event)
             update { $0.activity = .idle }
             if searcherStale { refreshSearcher(force: true) }
+            handNewFiles()
         case "waiting":
             applyCounts(event)
             update {
@@ -747,6 +755,7 @@ nonisolated final class Engine: @unchecked Sendable {
         }
         if searcherStale { refreshSearcher(force: true) }
         if codeSearcherStale { refreshCodeSearcher(force: true) }
+        handNewFiles()
         returnFreedMemory()
         removeCodeIndexIfAsked()
         if restartHelper {
@@ -763,6 +772,15 @@ nonisolated final class Engine: @unchecked Sendable {
             // (its sync failed) waits for the next change: restarting for it would loop as fast as it fails.
             if wanted > helperStarted { startHelper() } else { syncWantedAt = nil }
         }
+    }
+
+    /// The new files, to the saved searches (`onNewFiles`). After the vectors' reload is queued (searchQueue runs in
+    /// order), so a search finds them.
+    private func handNewFiles() {
+        guard !newlyIndexed.isEmpty else { return }
+        let (paths, handler) = (newlyIndexed, onNewFiles)
+        newlyIndexed = []
+        DispatchQueue.main.async { handler?(paths) }
     }
 
     /// New vectors reach the panel: reload the searcher's copy, at most every 2 s during a long pass. If the panel
@@ -929,6 +947,14 @@ nonisolated final class Engine: @unchecked Sendable {
                 guard let worker, let vector else { return continuation.resume(returning: nil) }
                 continuation.resume(returning: QueryVector(values: vector, source: worker.info.vectorSource))
             }
+        }
+    }
+
+    /// A query's vector now, whatever is being typed (`embedQuery` gives up on text that isn't the newest typed): for
+    /// saved searches checked against new files.
+    func embed(_ text: String, code: Bool = false) async -> QueryVector? {
+        await withCheckedContinuation { continuation in
+            encoderQueue.async { [self] in continuation.resume(returning: vector(for: text, code: code)) }
         }
     }
 

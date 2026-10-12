@@ -1,7 +1,8 @@
 import AppKit
+import UserNotifications
 
 @main
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     private var app: AppController?
 
     static func main() {
@@ -38,9 +39,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let app = AppController(settings: settings)
         self.app = app
+        UNUserNotificationCenter.current().delegate = self
         NSApp.mainMenu = Self.makeMainMenu(app)
         app.start(showWindow: showWindow)
         DebugHooks.run(app)
+    }
+
+    /// A saved search's notification (`SavedSearches.swift`), clicked: that search in the panel.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse) async {
+        guard let query = response.notification.request.content.userInfo["query"] as? String else { return }
+        await MainActor.run { app?.searchInPanel(query) }
+    }
+
+    /// Shown while DigUp is the active app too (its panel is open).
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification) async
+        -> UNNotificationPresentationOptions {
+        [.banner, .sound]
     }
 
     /// Opening the app again (from Finder or Spotlight) while it runs: show its window.

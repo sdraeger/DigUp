@@ -32,6 +32,7 @@ whatever kind of file it is. All of it happens on your Mac.
 - "code: retry a failed call with backoff" finds the function in your projects, if you turn on code search
 - a file is a search too: drop a photo, a recording or a document into the panel, or press ⌘L on a result, and get
   the pictures, pages, moments and notes most like it
+- a saved search keeps watching: save "receipts" with ⌘S, and DigUp tells you when a new file matches it
 
 Exact words count too. Invoice numbers, error codes and names are matched as written, in file names, document text
 and the text inside screenshots, so a search gets both the meaning and the exact string.
@@ -63,6 +64,7 @@ DigUp needs an Apple Silicon Mac with macOS 14 or later (it's tested on macOS 26
 | ⌘C | Copies the file, to paste anywhere |
 | ⌘O | The same search in a bigger window, with a picture grid and filters |
 | ⌘L | More like this: the files most like the selected result, at its page or moment |
+| ⌘S | Saves the search (or forgets it): a notification says when new files match it. An empty field lists them |
 
 DigUp lives in the menu bar, where you can see how indexing is going, pause it, or open Settings. The first time a
 video opens at its moment, macOS asks whether DigUp may control QuickTime Player; that's how it jumps there.

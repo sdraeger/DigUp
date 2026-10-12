@@ -42,6 +42,8 @@ nonisolated struct AppSettings: Sendable {
     var codeEditor: String?
     /// The code index catches up once the code folders have been quiet this long (`-codeQuietSeconds`, default 60).
     var codeQuietSeconds: Double
+    /// Searches kept (⌘S in the panel) and watched for new files that match (`SavedSearches.swift`).
+    var savedSearches: [String]
 
     static let supportDirectory = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/DigUp")
@@ -84,7 +86,8 @@ nonisolated struct AppSettings: Sendable {
             codeExcluded: folders(defaults, "codeExcludedFolders"),
             codeEditor: defaults.string(forKey: "codeEditor"),
             codeQuietSeconds: defaults.object(forKey: "codeQuietSeconds") == nil
-                ? 60 : max(1, defaults.double(forKey: "codeQuietSeconds")))
+                ? 60 : max(1, defaults.double(forKey: "codeQuietSeconds")),
+            savedSearches: defaults.stringArray(forKey: "savedSearches") ?? [])
     }
 
     /// A list of folders: a plist array, or paths joined with ":" (the form launch arguments use).
@@ -111,6 +114,10 @@ nonisolated struct AppSettings: Sendable {
 
     static func save(excludedTypes: [String]) {
         defaults.set(excludedTypes, forKey: "excludedTypes")
+    }
+
+    static func save(savedSearches: [String]) {
+        defaults.set(savedSearches, forKey: "savedSearches")
     }
 
     static func save(hotkey: String) {

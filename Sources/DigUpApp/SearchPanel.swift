@@ -32,6 +32,8 @@ final class SearchPanelController {
     static let fadeOut: TimeInterval = 0.12
     /// The selectable row that folds and unfolds the weaker matches.
     static let weakerToggle = "\u{0}weaker"
+    /// A saved search's row, in the list an empty field shows: this, then the query.
+    static let savedRow = "\u{1}"
 
     var query = "" {
         didSet { if query != oldValue { queryChanged() } }
@@ -84,9 +86,13 @@ final class SearchPanelController {
     var isVisible: Bool { window?.isVisible == true && !fading }
     var windowNumber: Int { window?.windowNumber ?? 0 }
     var isPreviewing: Bool { QLPreviewPanel.sharedPreviewPanelExists() && QLPreviewPanel.shared().isVisible }
-    /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded.
+    var saved: [String] { model.settings.savedSearches }
+    var isSaved: Bool { saved.contains(query.trimmingCharacters(in: .whitespacesAndNewlines)) }
+    /// The selectable rows in order: strong results group by group, the fold, then the weaker ones if unfolded (or
+    /// the saved searches, while the field is empty).
     var rowIDs: [String] {
-        results.groups.flatMap { $0.rows.map(\.id) }
+        if phase == .empty { return saved.prefix(Self.savedRowsShown).map { Self.savedRow + $0 } }
+        return results.groups.flatMap { $0.rows.map(\.id) }
             + (results.weaker.isEmpty ? [] : [Self.weakerToggle])
             + (showWeaker ? results.weaker.map(\.id) : [])
     }
@@ -257,6 +263,17 @@ final class SearchPanelController {
         }
     }
 
+    /// ⌘S: keeps this search and says when new files match it (`SavedSearches.swift`); again, forgets it.
+    func toggleSave() {
+        let typed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !typed.isEmpty else { return }
+        flash(app.toggleSaved(typed) ? "Saved: you'll be told when new files match" : "No longer saved")
+    }
+
+    func selectSaved(_ query: String) {
+        selection = Self.savedRow + query
+    }
+
     /// More Like This (⌘L): the files most like the selected result, at the page or moment it matched.
     func likeSelected() {
         guard let row = selectedRow, row.kind != .code, row.segmentID != 0 else { return }
@@ -370,6 +387,14 @@ final class SearchPanelController {
         case 16 where modifiers == .command:  // ⌘Y
             toggleQuickLook()
             return true
+        case 1 where modifiers == .command:  // ⌘S: save the search, or forget it
+            toggleSave()
+            return true
+        case 51 where modifiers == .command && selection?.hasPrefix(Self.savedRow) == true:  // ⌘⌫: forget it
+            app.toggleSaved(String(selection!.dropFirst()))
+            selection = nil
+            resizeWindow()
+            return true
         case 37 where modifiers == .command:  // ⌘L: More Like This
             likeSelected()
             return true
@@ -405,6 +430,7 @@ final class SearchPanelController {
 
     /// ↩: the file in its app, at the page or moment that matched when the app can be told where.
     func openSelected() {
+        if let selection, selection.hasPrefix(Self.savedRow) { return query = String(selection.dropFirst()) }
         guard let row = selectedRow else { return }
         engine.open(row)
         hide()
@@ -496,8 +522,14 @@ final class SearchPanelController {
         return window
     }
 
+    static let savedRowsShown = 8
+    static let savedRowHeight: CGFloat = 30
+
+    /// An empty field: the field alone, or with the saved searches under it.
     private var desiredHeight: CGFloat {
-        query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Self.fieldHeight : Self.expandedHeight
+        guard query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return Self.expandedHeight }
+        let rows = min(saved.count, Self.savedRowsShown)
+        return rows == 0 ? Self.fieldHeight : Self.fieldHeight + 40 + CGFloat(rows) * Self.savedRowHeight
     }
 
     /// Centered on the screen with the pointer, a little above the middle, like Spotlight.

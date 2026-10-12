@@ -84,6 +84,7 @@ final class AppController {
         Previews.shared.passage = { [engine] id, code in await engine.text(ofSegment: id, code: code) }
         CodeEditor.current = CodeEditor.chosen(model.settings.codeEditor)
         download.onReady = { [weak self] in self?.engine.modelArrived() }
+        engine.onNewFiles = { [weak self] in self?.checkSavedSearches($0) }
         engine.start()
         let settings = model.settings
         if !settings.onboarded, settings.roots.isEmpty {
